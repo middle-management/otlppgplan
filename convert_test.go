@@ -2,12 +2,14 @@ package otlppgplan
 
 import (
 	"context"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
@@ -15,27 +17,12 @@ import (
 const snapshotDir = "testdata/__snapshots__"
 
 // Test constants for deterministic output
-const (
-	fixedBaseTimeUnix  = 1700000000 // 2023-11-15 00:00:00 UTC
-	fixedTraceIDHex    = "0102030405060708090a0b0c0d0e0f10"
-	fixedRootSpanIDHex = "0102030405060708"
-	fixedSpanIDCounter = 100 // Start counter at 100 to avoid collisions
-)
-
 var (
-	fixedBaseTime   = time.Unix(fixedBaseTimeUnix, 0)
-	fixedTraceID    = fixedTraceIDHex
-	fixedRootSpanID = fixedRootSpanIDHex
+	fixedBaseTime = time.Unix(1700000000, 0) // 2023-11-15 00:00:00 UTC
 )
 
 // TestConvertExplainJSONFiles tests parsing of all JSON files in testdata/examples/
 // and generates snapshot output for verification.
-//
-// The test uses deterministic options to ensure reproducible snapshots:
-// - BaseTime: Fixed timestamp for all spans
-// - TraceID: Fixed trace ID
-// - RootSpanID: Fixed root span ID
-// - SpanIDCounter: Sequential counter for child span IDs
 //
 // Snapshots are stored in testdata/__snapshots__/ and automatically
 // compared on each test run. To update snapshots after intentional changes,
@@ -72,9 +59,6 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 				t.Fatalf("failed to read test file %s: %v", file.Name(), err)
 			}
 
-			// Use deterministic counter for child span IDs
-			counter := fixedSpanIDCounter
-
 			// Convert to traces with deterministic options
 			ctx := context.Background()
 			opts := ConvertOptions{
@@ -85,9 +69,7 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 				PeerPort:        5432,
 				IncludePlanJSON: false,
 				BaseTime:        &fixedBaseTime,
-				TraceID:         &fixedTraceID,
-				RootSpanID:      &fixedRootSpanID,
-				SpanIDCounter:   &counter,
+				IDGenerator:     &DeterministicIDGenerator{},
 			}
 
 			traces, err := ConvertExplainJSONToTraces(ctx, content, opts)
@@ -151,4 +133,23 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+type DeterministicIDGenerator struct {
+	i int
+}
+
+func (d *DeterministicIDGenerator) NewTraceID() pcommon.TraceID {
+	d.i++
+	var tid [16]byte
+	binary.LittleEndian.PutUint64(tid[:8], uint64(d.i))
+	binary.LittleEndian.PutUint64(tid[8:], uint64(d.i))
+	return pcommon.TraceID(tid)
+}
+
+// deterministicSpanID generates a span ID from a counter for testing
+func (d *DeterministicIDGenerator) NewSpanID() pcommon.SpanID {
+	var sid [8]byte
+	binary.LittleEndian.PutUint64(sid[:], uint64(d.i))
+	return pcommon.SpanID(sid)
 }

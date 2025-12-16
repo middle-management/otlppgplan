@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -88,7 +87,7 @@ type PlanNode struct {
 // -----------------------------
 
 type ConvertOptions struct {
-	// Resource attrs
+	// Resource attributes
 	DBName string // db.name
 
 	// Span attributes
@@ -102,12 +101,45 @@ type ConvertOptions struct {
 	BaseTime *time.Time // optional base time for deterministic timestamps (defaults to time.Now() if nil)
 
 	// ID control for deterministic testing
-	TraceID       *string // optional fixed trace ID for testing (defaults to random if nil)
-	RootSpanID    *string // optional fixed root span ID for testing (defaults to random if nil)
-	SpanIDCounter *int    // optional counter for deterministic child span IDs (defaults to random if nil)
+	IDGenerator
 }
 
+// Converter holds the state for converting PostgreSQL EXPLAIN JSON to traces
+type Converter struct {
+	opts        ConvertOptions
+	traceID     pcommon.TraceID
+	rootSpanID  pcommon.SpanID
+	baseTime    time.Time
+	idGenerator IDGenerator
+}
+
+// NewConverter creates a new Converter instance
+func NewConverter(opts ConvertOptions) *Converter {
+	c := &Converter{
+		opts:        opts,
+		idGenerator: &RandomIDGenerator{},
+	}
+
+	// Initialize deterministic values if provided
+	if opts.BaseTime != nil {
+		c.baseTime = *opts.BaseTime
+	}
+
+	if opts.IDGenerator != nil {
+		c.idGenerator = opts.IDGenerator
+	}
+
+	return c
+}
+
+// ConvertExplainJSONToTraces converts PostgreSQL EXPLAIN JSON to OpenTelemetry traces
 func ConvertExplainJSONToTraces(ctx context.Context, explainJSON []byte, opts ConvertOptions) (ptrace.Traces, error) {
+	converter := NewConverter(opts)
+	return converter.Convert(ctx, explainJSON)
+}
+
+// Convert performs the conversion using the converter's options
+func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Traces, error) {
 	var doc ExplainDocument
 	if err := json.Unmarshal(explainJSON, &doc); err != nil {
 		return ptrace.Traces{}, fmt.Errorf("parse explain json: %w", err)
@@ -125,26 +157,26 @@ func ConvertExplainJSONToTraces(ctx context.Context, explainJSON []byte, opts Co
 
 	spans := ss.Spans()
 
-	// Build IDs
+	// Use pre-initialized IDs from converter
 	var traceID pcommon.TraceID
 	var rootSpanID pcommon.SpanID
 
-	if opts.TraceID != nil {
-		traceID = hexStringToTraceID(*opts.TraceID)
+	if !c.traceID.IsEmpty() {
+		traceID = c.traceID
 	} else {
-		traceID = newTraceID()
+		traceID = c.idGenerator.NewTraceID()
 	}
 
-	if opts.RootSpanID != nil {
-		rootSpanID = hexStringToSpanID(*opts.RootSpanID)
+	if !c.rootSpanID.IsEmpty() {
+		rootSpanID = c.rootSpanID
 	} else {
-		rootSpanID = newSpanID()
+		rootSpanID = c.idGenerator.NewSpanID()
 	}
 
-	// Pick a "now" start time for the whole trace
+	// Use pre-initialized base time from converter
 	var start pcommon.Timestamp
-	if opts.BaseTime != nil {
-		start = pcommon.NewTimestampFromTime(*opts.BaseTime)
+	if !c.baseTime.IsZero() {
+		start = pcommon.NewTimestampFromTime(c.baseTime)
 	} else {
 		start = pcommon.NewTimestampFromTime(time.Now().UTC())
 	}
@@ -156,27 +188,27 @@ func ConvertExplainJSONToTraces(ctx context.Context, explainJSON []byte, opts Co
 	q := spans.AppendEmpty()
 	q.SetTraceID(traceID)
 	q.SetSpanID(rootSpanID)
-	q.SetName(querySpanName(opts.Operation))
+	q.SetName(querySpanName(c.opts.Operation))
 	q.SetKind(ptrace.SpanKindClient)
 	q.SetStartTimestamp(start)
 	q.SetEndTimestamp(end)
 
 	attrs := q.Attributes()
 	attrs.PutStr("db.system", "postgresql")
-	if opts.DBName != "" {
-		attrs.PutStr("db.name", opts.DBName)
+	if c.opts.DBName != "" {
+		attrs.PutStr("db.name", c.opts.DBName)
 	}
-	if opts.Statement != "" {
-		attrs.PutStr("db.statement", opts.Statement)
+	if c.opts.Statement != "" {
+		attrs.PutStr("db.statement", c.opts.Statement)
 	}
-	if opts.Operation != "" {
-		attrs.PutStr("db.operation", opts.Operation)
+	if c.opts.Operation != "" {
+		attrs.PutStr("db.operation", c.opts.Operation)
 	}
-	if opts.PeerAddress != "" {
-		attrs.PutStr("server.address", opts.PeerAddress)
+	if c.opts.PeerAddress != "" {
+		attrs.PutStr("server.address", c.opts.PeerAddress)
 	}
-	if opts.PeerPort != 0 {
-		attrs.PutInt("server.port", int64(opts.PeerPort))
+	if c.opts.PeerPort != 0 {
+		attrs.PutInt("server.port", int64(c.opts.PeerPort))
 	}
 	if root.PlanningTime != nil {
 		attrs.PutDouble("db.postgresql.planning_time_ms", *root.PlanningTime)
@@ -184,25 +216,19 @@ func ConvertExplainJSONToTraces(ctx context.Context, explainJSON []byte, opts Co
 	if root.ExecutionTime != nil {
 		attrs.PutDouble("db.postgresql.execution_time_ms", *root.ExecutionTime)
 	}
-	if opts.IncludePlanJSON {
+	if c.opts.IncludePlanJSON {
 		// Warning: can be extremely large; consider only attaching for slow queries.
 		attrs.PutStr("db.postgresql.plan_json", string(explainJSON))
 	}
 
 	// Emit plan-node spans recursively.
-	emitPlanNodeSpans(spans, traceID, rootSpanID, start, root.Plan, opts.SpanIDCounter)
+	c.emitPlanNodeSpans(spans, traceID, rootSpanID, start, root.Plan)
 
 	return tr, nil
 }
 
-func emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, parentStart pcommon.Timestamp, node PlanNode, spanIDCounter *int) {
-	var spanID pcommon.SpanID
-	if spanIDCounter != nil {
-		spanID = deterministicSpanID(*spanIDCounter)
-		*spanIDCounter++
-	} else {
-		spanID = newSpanID()
-	}
+func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, parentStart pcommon.Timestamp, node PlanNode) {
+	spanID := c.idGenerator.NewSpanID()
 
 	// Duration: node's "Actual Total Time" if present, else 0.
 	durMS := firstNonNil(node.ActualTotalTime, nil, 0)
@@ -283,7 +309,7 @@ func emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSp
 
 	// Recurse
 	for _, child := range node.Plans {
-		emitPlanNodeSpans(spans, traceID, spanID, nodeStart, child, spanIDCounter)
+		c.emitPlanNodeSpans(spans, traceID, spanID, nodeStart, child)
 	}
 }
 
@@ -353,49 +379,26 @@ func putF64Ptr(m pcommon.Map, key string, v *float64) {
 	}
 }
 
-func newTraceID() pcommon.TraceID {
-	var tid [16]byte
-	_, _ = rand.Read(tid[:])
-	return pcommon.TraceID(tid)
+type IDGenerator interface {
+	NewTraceID() pcommon.TraceID
+	NewSpanID() pcommon.SpanID
 }
 
-func newSpanID() pcommon.SpanID {
-	var sid [8]byte
-	_, _ = rand.Read(sid[:])
+type RandomIDGenerator struct {
+	tid [16]byte
+	sid [8]byte
+}
+
+func (g *RandomIDGenerator) NewTraceID() pcommon.TraceID {
+	_, _ = rand.Read(g.tid[:])
+	return pcommon.TraceID(g.tid)
+}
+
+func (g *RandomIDGenerator) NewSpanID() pcommon.SpanID {
+	_, _ = rand.Read(g.sid[:])
 	// make it non-zero-ish
-	if binary.LittleEndian.Uint64(sid[:]) == 0 {
-		sid[0] = 1
+	if binary.LittleEndian.Uint64(g.sid[:]) == 0 {
+		g.sid[0] = 1
 	}
-	return pcommon.SpanID(sid)
-}
-
-// hexStringToTraceID converts a hex string to TraceID
-func hexStringToTraceID(hexStr string) pcommon.TraceID {
-	bytes, _ := hex.DecodeString(hexStr)
-	var tid [16]byte
-	copy(tid[:], bytes)
-	return pcommon.TraceID(tid)
-}
-
-// hexStringToSpanID converts a hex string to SpanID
-func hexStringToSpanID(hexStr string) pcommon.SpanID {
-	bytes, _ := hex.DecodeString(hexStr)
-	var sid [8]byte
-	copy(sid[:], bytes)
-	return pcommon.SpanID(sid)
-}
-
-// deterministicSpanID generates a span ID from a counter for testing
-func deterministicSpanID(counter int) pcommon.SpanID {
-	var sid [8]byte
-	binary.LittleEndian.PutUint64(sid[:], uint64(counter))
-	return pcommon.SpanID(sid)
-}
-
-// deterministicTraceID generates a trace ID from a counter for testing
-func deterministicTraceID(counter int) pcommon.TraceID {
-	var tid [16]byte
-	binary.LittleEndian.PutUint64(tid[:8], uint64(counter))
-	binary.LittleEndian.PutUint64(tid[8:], uint64(counter))
-	return pcommon.TraceID(tid)
+	return pcommon.SpanID(g.sid)
 }
