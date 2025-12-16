@@ -157,16 +157,14 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 
 	spans := ss.Spans()
 
-	// Use pre-initialized IDs from converter
 	var traceID pcommon.TraceID
-	var rootSpanID pcommon.SpanID
-
 	if !c.traceID.IsEmpty() {
 		traceID = c.traceID
 	} else {
 		traceID = c.idGenerator.NewTraceID()
 	}
 
+	var rootSpanID pcommon.SpanID
 	if !c.rootSpanID.IsEmpty() {
 		rootSpanID = c.rootSpanID
 	} else {
