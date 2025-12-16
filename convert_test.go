@@ -14,16 +14,32 @@ import (
 // snapshotDir is where snapshot files are stored
 const snapshotDir = "testdata/__snapshots__"
 
-// fixedBaseTime provides deterministic timestamps for testing
-var fixedBaseTime = time.Unix(1700000000, 0) // 2023-11-15 00:00:00 UTC
+// Test constants for deterministic output
+const (
+	fixedBaseTimeUnix  = 1700000000 // 2023-11-15 00:00:00 UTC
+	fixedTraceIDHex    = "0102030405060708090a0b0c0d0e0f10"
+	fixedRootSpanIDHex = "0102030405060708"
+	fixedSpanIDCounter = 100 // Start counter at 100 to avoid collisions
+)
 
-// fixedTraceID and fixedRootSpanID provide deterministic IDs for testing
-var fixedTraceID = "0102030405060708090a0b0c0d0e0f10"
-var fixedRootSpanID = "0102030405060708"
-var fixedSpanIDCounter = 100 // Start counter at 100 to avoid collisions with root span
+var (
+	fixedBaseTime   = time.Unix(fixedBaseTimeUnix, 0)
+	fixedTraceID    = fixedTraceIDHex
+	fixedRootSpanID = fixedRootSpanIDHex
+)
 
 // TestConvertExplainJSONFiles tests parsing of all JSON files in testdata/examples/
-// and generates snapshot output for verification
+// and generates snapshot output for verification.
+//
+// The test uses deterministic options to ensure reproducible snapshots:
+// - BaseTime: Fixed timestamp for all spans
+// - TraceID: Fixed trace ID
+// - RootSpanID: Fixed root span ID
+// - SpanIDCounter: Sequential counter for child span IDs
+//
+// Snapshots are stored in testdata/__snapshots__/ and automatically
+// compared on each test run. To update snapshots after intentional changes,
+// run: SNAPSHOT_UPDATE=1 go test -v
 func TestConvertExplainJSONFiles(t *testing.T) {
 	examplesDir := "testdata/examples"
 
@@ -56,10 +72,10 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 				t.Fatalf("failed to read test file %s: %v", file.Name(), err)
 			}
 
-			// Use a fresh counter for each test to ensure deterministic child span IDs
+			// Use deterministic counter for child span IDs
 			counter := fixedSpanIDCounter
 
-			// Convert to traces with deterministic base time and IDs
+			// Convert to traces with deterministic options
 			ctx := context.Background()
 			opts := ConvertOptions{
 				DBName:          "testdb",
@@ -68,10 +84,10 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 				PeerAddress:     "localhost",
 				PeerPort:        5432,
 				IncludePlanJSON: false,
-				BaseTime:        &fixedBaseTime,   // Use fixed time for deterministic output
-				TraceID:         &fixedTraceID,    // Use fixed trace ID for deterministic output
-				RootSpanID:      &fixedRootSpanID, // Use fixed root span ID for deterministic output
-				SpanIDCounter:   &counter,         // Use counter for deterministic child span IDs
+				BaseTime:        &fixedBaseTime,
+				TraceID:         &fixedTraceID,
+				RootSpanID:      &fixedRootSpanID,
+				SpanIDCounter:   &counter,
 			}
 
 			traces, err := ConvertExplainJSONToTraces(ctx, content, opts)
@@ -79,7 +95,7 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 				t.Fatalf("failed to convert JSON to traces for %s: %v", file.Name(), err)
 			}
 
-			// Verify basic structure
+			// Verify basic trace structure
 			if traces.ResourceSpans().Len() == 0 {
 				t.Fatal("should have resource spans")
 			}
