@@ -179,8 +179,10 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 		start = pcommon.NewTimestampFromTime(time.Now().UTC())
 	}
 
-	// Root query span duration: prefer Execution Time; else fall back to plan node total time
-	rootDurMS := firstNonNil(root.ExecutionTime, root.Plan.ActualTotalTime, 0)
+	// Root query span duration includes planning (if present) plus execution.
+	planningMS := firstNonNil(root.PlanningTime, nil, 0)
+	executionMS := firstNonNil(root.ExecutionTime, root.Plan.ActualTotalTime, 0)
+	rootDurMS := planningMS + executionMS
 	end := addMS(start, rootDurMS)
 
 	q := spans.AppendEmpty()
@@ -219,10 +221,31 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 		attrs.PutStr("db.postgresql.plan_json", string(explainJSON))
 	}
 
+	execStart := start
+	if planningMS > 0 {
+		execStart = addMS(start, planningMS)
+		c.emitPlanningSpan(spans, traceID, rootSpanID, start, planningMS)
+	}
+
 	// Emit plan-node spans recursively.
-	c.emitPlanNodeSpans(spans, traceID, rootSpanID, start, root.Plan)
+	c.emitPlanNodeSpans(spans, traceID, rootSpanID, execStart, root.Plan)
 
 	return tr, nil
+}
+
+func (c *Converter) emitPlanningSpan(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, start pcommon.Timestamp, durMS float64) {
+	s := spans.AppendEmpty()
+	s.SetTraceID(traceID)
+	s.SetSpanID(c.idGenerator.NewSpanID())
+	s.SetParentSpanID(parentSpanID)
+	s.SetName("DB PLAN")
+	s.SetKind(ptrace.SpanKindInternal)
+	s.SetStartTimestamp(start)
+	s.SetEndTimestamp(addMS(start, durMS))
+
+	a := s.Attributes()
+	a.PutStr("db.system", "postgresql")
+	a.PutDouble("db.postgresql.planning_time_ms", durMS)
 }
 
 func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, parentStart pcommon.Timestamp, node PlanNode) {
