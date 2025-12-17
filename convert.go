@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -31,11 +32,14 @@ type PlanNode struct {
 	NodeType string `json:"Node Type"`
 
 	// Common identity fields
-	RelationName *string `json:"Relation Name,omitempty"`
-	Schema       *string `json:"Schema,omitempty"`
-	Alias        *string `json:"Alias,omitempty"`
-	IndexName    *string `json:"Index Name,omitempty"`
-	JoinType     *string `json:"Join Type,omitempty"`
+	RelationName  *string `json:"Relation Name,omitempty"`
+	Schema        *string `json:"Schema,omitempty"`
+	Alias         *string `json:"Alias,omitempty"`
+	IndexName     *string `json:"Index Name,omitempty"`
+	JoinType      *string `json:"Join Type,omitempty"`
+	SubplanName   *string `json:"Subplan Name,omitempty"`
+	CTEName       *string `json:"CTE Name,omitempty"`
+	ParallelAware *bool   `json:"Parallel Aware,omitempty"`
 
 	ParentRelationship *string `json:"Parent Relationship,omitempty"`
 
@@ -80,6 +84,20 @@ type PlanNode struct {
 
 	// Nested nodes
 	Plans []PlanNode `json:"Plans,omitempty"`
+
+	// Parallel worker details (if present)
+	Workers []PlanWorker `json:"Workers,omitempty"`
+
+	// Derived fields (not from JSON)
+	DerivedTotalTime float64 `json:"-"`
+}
+
+type PlanWorker struct {
+	WorkerNumber      *int     `json:"Worker Number,omitempty"`
+	ActualStartupTime *float64 `json:"Actual Startup Time,omitempty"` // ms
+	ActualTotalTime   *float64 `json:"Actual Total Time,omitempty"`   // ms
+	ActualRows        *float64 `json:"Actual Rows,omitempty"`
+	ActualLoops       *float64 `json:"Actual Loops,omitempty"`
 }
 
 // -----------------------------
@@ -88,7 +106,8 @@ type PlanNode struct {
 
 type ConvertOptions struct {
 	// Resource attributes
-	DBName string // db.name
+	ServiceName string // service.name
+	DBName      string // db.name
 
 	// Span attributes
 	Statement       string // db.statement (optional; consider redaction)
@@ -96,6 +115,7 @@ type ConvertOptions struct {
 	PeerAddress     string // server.address (optional)
 	PeerPort        int    // server.port (optional)
 	IncludePlanJSON bool   // attach raw plan JSON string to root span (can be huge)
+	ExpandLoops     bool   // emit synthetic child spans for loop iterations (uses derived totals)
 
 	// Timestamp control for testing
 	BaseTime *time.Time // optional base time for deterministic timestamps (defaults to time.Now() if nil)
@@ -152,6 +172,10 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 
 	tr := ptrace.NewTraces()
 	rs := tr.ResourceSpans().AppendEmpty()
+	rattrs := rs.Resource().Attributes()
+	if c.opts.ServiceName != "" {
+		rattrs.PutStr("service.name", c.opts.ServiceName)
+	}
 	ss := rs.ScopeSpans().AppendEmpty()
 	ss.Scope().SetName("otlppgplan")
 
@@ -178,6 +202,9 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 	} else {
 		start = pcommon.NewTimestampFromTime(time.Now().UTC())
 	}
+
+	// Preprocess plan for derived timings (loops, CTE de-dup, child boost).
+	processPlanDerived(&root.Plan)
 
 	// Root query span duration includes planning (if present) plus execution.
 	planningMS := firstNonNil(root.PlanningTime, nil, 0)
@@ -226,9 +253,14 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 		execStart = addMS(start, planningMS)
 		c.emitPlanningSpan(spans, traceID, rootSpanID, start, planningMS)
 	}
+	execSpanID := rootSpanID
+	if executionMS > 0 {
+		execSpanID = c.emitExecutionSpan(spans, traceID, rootSpanID, execStart, executionMS)
+	}
+	execEnd := addMS(execStart, executionMS)
 
 	// Emit plan-node spans recursively.
-	c.emitPlanNodeSpans(spans, traceID, rootSpanID, execStart, root.Plan)
+	c.emitPlanNodeSpans(spans, traceID, execSpanID, execStart, execEnd, root.Plan)
 
 	return tr, nil
 }
@@ -248,13 +280,44 @@ func (c *Converter) emitPlanningSpan(spans ptrace.SpanSlice, traceID pcommon.Tra
 	a.PutDouble("db.postgresql.planning_time_ms", durMS)
 }
 
-func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, parentStart pcommon.Timestamp, node PlanNode) {
+func (c *Converter) emitExecutionSpan(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, start pcommon.Timestamp, durMS float64) pcommon.SpanID {
+	s := spans.AppendEmpty()
+	spanID := c.idGenerator.NewSpanID()
+	s.SetTraceID(traceID)
+	s.SetSpanID(spanID)
+	s.SetParentSpanID(parentSpanID)
+	s.SetName("DB EXECUTION")
+	s.SetKind(ptrace.SpanKindInternal)
+	s.SetStartTimestamp(start)
+	s.SetEndTimestamp(addMS(start, durMS))
+
+	a := s.Attributes()
+	a.PutStr("db.system", "postgresql")
+	a.PutDouble("db.postgresql.execution_time_ms", durMS)
+
+	return spanID
+}
+
+func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, execBase, execEnd pcommon.Timestamp, node PlanNode) {
 	spanID := c.idGenerator.NewSpanID()
 
-	// Duration: node's "Actual Total Time" if present, else 0.
-	durMS := firstNonNil(node.ActualTotalTime, nil, 0)
-	nodeStart := parentStart
-	nodeEnd := addMS(nodeStart, durMS)
+	// Wall-clock: use reported offsets from execution start (startup/total). Duration uses raw Actual Total Time.
+	// InitPlans execute at the start of the execution phase, not offset by their startup time.
+	isInitPlan := node.ParentRelationship != nil && *node.ParentRelationship == "InitPlan"
+	nodeStart := execBase
+	if !isInitPlan && node.ActualStartupTime != nil {
+		nodeStart = addMS(execBase, *node.ActualStartupTime)
+	}
+	// Duration: raw actual total time (no loop scaling) to reflect wall-clock.
+	nodeDur := firstNonNil(node.ActualTotalTime, nil, 0)
+	selfDur := exclusiveFromActuals(node)
+	if selfDur <= 0 {
+		selfDur = nodeDur
+	}
+	nodeEnd := addMS(nodeStart, selfDur)
+	if nodeEnd < nodeStart {
+		nodeEnd = nodeStart
+	}
 
 	s := spans.AppendEmpty()
 	s.SetTraceID(traceID)
@@ -283,6 +346,8 @@ func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.Tr
 
 	putF64Ptr(a, "db.postgresql.actual_startup_time_ms", node.ActualStartupTime)
 	putF64Ptr(a, "db.postgresql.actual_total_time_ms", node.ActualTotalTime)
+	// Always add derived_total_time_ms for consistency, even if it equals actual_total_time_ms
+	a.PutDouble("db.postgresql.derived_total_time_ms", node.DerivedTotalTime)
 	putF64Ptr(a, "db.postgresql.actual_rows", node.ActualRows)
 	putF64Ptr(a, "db.postgresql.actual_loops", node.ActualLoops)
 
@@ -314,24 +379,176 @@ func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.Tr
 	putStrPtr(a, "db.postgresql.sort_space_type", node.SortSpaceType)
 
 	// Exclusive time (best-effort): total - sum(child totals)
-	if node.ActualTotalTime != nil && len(node.Plans) > 0 {
-		var childSum float64
-		for _, c := range node.Plans {
-			if c.ActualTotalTime != nil {
-				childSum += *c.ActualTotalTime
-			}
-		}
-		excl := *node.ActualTotalTime - childSum
-		if excl < 0 {
-			excl = 0
-		}
+	excl := exclusiveFromActuals(node)
+	if excl > 0 {
 		a.PutDouble("db.postgresql.exclusive_time_ms", excl)
 	}
 
 	// Recurse
 	for _, child := range node.Plans {
-		c.emitPlanNodeSpans(spans, traceID, spanID, nodeStart, child)
+		c.emitPlanNodeSpans(spans, traceID, spanID, execBase, execEnd, child)
 	}
+
+	// Synthetic loop iteration spans (optional)
+	if c.opts.ExpandLoops && node.DerivedTotalTime > 0 && node.ActualLoops != nil && *node.ActualLoops > 1 {
+		c.emitLoopIterations(spans, traceID, spanID, nodeStart, node.DerivedTotalTime, int(*node.ActualLoops))
+	}
+
+	// Add worker information as attributes instead of creating child spans
+	if len(node.Workers) > 0 {
+		a.PutInt("db.postgresql.workers_count", int64(len(node.Workers)))
+		for i, w := range node.Workers {
+			prefix := fmt.Sprintf("db.postgresql.worker.%d", i)
+			if w.WorkerNumber != nil {
+				a.PutInt(prefix+".number", int64(*w.WorkerNumber))
+			}
+			if w.ActualStartupTime != nil {
+				a.PutDouble(prefix+".actual_startup_time_ms", *w.ActualStartupTime)
+			}
+			if w.ActualTotalTime != nil {
+				a.PutDouble(prefix+".actual_total_time_ms", *w.ActualTotalTime)
+			}
+			if w.ActualRows != nil {
+				a.PutDouble(prefix+".actual_rows", *w.ActualRows)
+			}
+			if w.ActualLoops != nil {
+				a.PutDouble(prefix+".actual_loops", *w.ActualLoops)
+			}
+		}
+	}
+}
+
+func (c *Converter) emitLoopIterations(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, start pcommon.Timestamp, totalMS float64, loops int) {
+	if loops <= 1 || totalMS <= 0 {
+		return
+	}
+	// Simple even split; best-effort visualization only.
+	iterDur := totalMS / float64(loops)
+	iterStart := start
+	for i := 0; i < loops; i++ {
+		iterEnd := addMS(iterStart, iterDur)
+		s := spans.AppendEmpty()
+		s.SetTraceID(traceID)
+		s.SetSpanID(c.idGenerator.NewSpanID())
+		s.SetParentSpanID(parentSpanID)
+		s.SetName(fmt.Sprintf("loop %d/%d", i+1, loops))
+		s.SetKind(ptrace.SpanKindInternal)
+		s.SetStartTimestamp(iterStart)
+		s.SetEndTimestamp(iterEnd)
+
+		a := s.Attributes()
+		a.PutStr("db.system", "postgresql")
+		a.PutInt("db.postgresql.loop_index", int64(i+1))
+		a.PutInt("db.postgresql.loop_count", int64(loops))
+		a.PutDouble("db.postgresql.loop_duration_ms", iterDur)
+
+		iterStart = iterEnd
+	}
+}
+
+// processPlanDerived computes derived totals with loop scaling, CTE de-duplication, and child boosting.
+func processPlanDerived(root *PlanNode) {
+	// Pass 1: compute base derived totals with loop scaling.
+	computeDerivedTotals(root)
+
+	// Pass 2: collect CTE init/scan nodes.
+	cteInits := make(map[string]*PlanNode)
+	cteScans := make(map[string][]*PlanNode)
+	collectCTENodes(root, cteInits, cteScans)
+	adjustCTETotals(cteInits, cteScans)
+
+	// Pass 3: child boost to keep parents at least sum of children.
+	applyChildBoost(root)
+}
+
+func computeDerivedTotals(n *PlanNode) {
+	for i := range n.Plans {
+		computeDerivedTotals(&n.Plans[i])
+	}
+
+	n.DerivedTotalTime = firstNonNil(n.ActualTotalTime, nil, 0)
+	if n.ActualLoops != nil && *n.ActualLoops > 1 {
+		n.DerivedTotalTime = n.DerivedTotalTime * *n.ActualLoops
+	}
+}
+
+func collectCTENodes(n *PlanNode, inits map[string]*PlanNode, scans map[string][]*PlanNode) {
+	// InitPlan with Subplan Name "CTE <name>"
+	if n.ParentRelationship != nil && *n.ParentRelationship == "InitPlan" && n.SubplanName != nil && strings.HasPrefix(*n.SubplanName, "CTE ") {
+		name := strings.TrimPrefix(*n.SubplanName, "CTE ")
+		inits[name] = n
+	}
+
+	// CTE Scan node
+	if n.NodeType == "CTE Scan" && n.CTEName != nil {
+		name := *n.CTEName
+		scans[name] = append(scans[name], n)
+	}
+
+	for i := range n.Plans {
+		collectCTENodes(&n.Plans[i], inits, scans)
+	}
+}
+
+func adjustCTETotals(inits map[string]*PlanNode, scans map[string][]*PlanNode) {
+	for name, scanNodes := range scans {
+		initNode := inits[name]
+		if initNode == nil {
+			continue
+		}
+		initTotal := initNode.DerivedTotalTime
+		if initTotal == 0 {
+			continue
+		}
+
+		var scanSum float64
+		for _, s := range scanNodes {
+			scanSum += s.DerivedTotalTime
+		}
+		if scanSum == 0 {
+			continue
+		}
+
+		for _, s := range scanNodes {
+			orig := s.DerivedTotalTime
+			newVal := orig * (1 - initTotal/scanSum)
+			if newVal < 0 {
+				newVal = 0
+			}
+			s.DerivedTotalTime = newVal
+		}
+	}
+}
+
+func applyChildBoost(n *PlanNode) {
+	for i := range n.Plans {
+		applyChildBoost(&n.Plans[i])
+	}
+
+	var childSum float64
+	for i := range n.Plans {
+		childSum += n.Plans[i].DerivedTotalTime
+	}
+	if n.DerivedTotalTime == 0 && childSum > 0 {
+		n.DerivedTotalTime = childSum
+	}
+}
+
+func exclusiveFromActuals(node PlanNode) float64 {
+	if node.ActualTotalTime == nil || len(node.Plans) == 0 {
+		return 0
+	}
+	var childSum float64
+	for _, c := range node.Plans {
+		if c.ActualTotalTime != nil {
+			childSum += *c.ActualTotalTime
+		}
+	}
+	excl := *node.ActualTotalTime - childSum
+	if excl < 0 {
+		return 0
+	}
+	return excl
 }
 
 // -----------------------------

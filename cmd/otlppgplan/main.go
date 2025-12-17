@@ -16,7 +16,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	traces, err := otlppgplan.ConvertExplainJSONToTraces(ctx, planJSON, otlppgplan.ConvertOptions{})
+	traces, err := otlppgplan.ConvertExplainJSONToTraces(ctx, planJSON, otlppgplan.ConvertOptions{
+		ExpandLoops: false,
+	})
 	if err != nil {
 		panic(err)
 	}
