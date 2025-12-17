@@ -1,0 +1,235 @@
+package pgplanconnector
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/middle-management/otlppgplan"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/connector"
+	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.uber.org/zap"
+)
+
+var _ connector.Logs = (*logsToTracesConnector)(nil)
+
+// logsToTracesConnector converts PostgreSQL EXPLAIN logs to traces
+type logsToTracesConnector struct {
+	config       *Config
+	logger       *zap.Logger
+	nextConsumer consumer.Traces
+}
+
+// Capabilities declares that this connector does not mutate logs
+func (c *logsToTracesConnector) Capabilities() consumer.Capabilities {
+	return consumer.Capabilities{MutatesData: false}
+}
+
+// Start is called when the connector starts
+func (c *logsToTracesConnector) Start(_ context.Context, _ component.Host) error {
+	c.logger.Info("Starting pgplan logs-to-traces connector")
+	return nil
+}
+
+// Shutdown is called when the connector stops
+func (c *logsToTracesConnector) Shutdown(_ context.Context) error {
+	c.logger.Info("Shutting down pgplan logs-to-traces connector")
+	return nil
+}
+
+// ConsumeLogs processes log records and emits traces
+func (c *logsToTracesConnector) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
+	// Collect all traces to emit in a single batch
+	allTraces := ptrace.NewTraces()
+
+	resourceLogs := ld.ResourceLogs()
+	for i := 0; i < resourceLogs.Len(); i++ {
+		resourceLog := resourceLogs.At(i)
+		scopeLogs := resourceLog.ScopeLogs()
+
+		for j := 0; j < scopeLogs.Len(); j++ {
+			scopeLog := scopeLogs.At(j)
+			logRecords := scopeLog.LogRecords()
+
+			for k := 0; k < logRecords.Len(); k++ {
+				logRecord := logRecords.At(k)
+
+				// Extract EXPLAIN JSON from log record
+				explainJSON, err := c.extractExplainJSON(logRecord)
+				if err != nil {
+					c.handleError(fmt.Errorf("failed to extract EXPLAIN JSON: %w", err))
+					continue
+				}
+
+				if explainJSON == "" {
+					continue // No EXPLAIN data in this log
+				}
+
+				// Convert EXPLAIN JSON to traces
+				traces, err := c.convertToTraces(ctx, explainJSON, resourceLog, logRecord)
+				if err != nil {
+					c.handleError(fmt.Errorf("failed to convert EXPLAIN to traces: %w", err))
+					continue
+				}
+
+				// Append traces to batch
+				traces.ResourceSpans().MoveAndAppendTo(allTraces.ResourceSpans())
+			}
+		}
+	}
+
+	// Emit all collected traces
+	if allTraces.SpanCount() > 0 {
+		return c.nextConsumer.ConsumeTraces(ctx, allTraces)
+	}
+
+	return nil
+}
+
+// extractExplainJSON extracts the EXPLAIN JSON from a log record
+func (c *logsToTracesConnector) extractExplainJSON(record plog.LogRecord) (string, error) {
+	switch c.config.Source.Type {
+	case "body":
+		return c.extractFromBody(record)
+	case "attribute":
+		return c.extractFromAttribute(record)
+	default:
+		return "", fmt.Errorf("unknown source type: %s", c.config.Source.Type)
+	}
+}
+
+func (c *logsToTracesConnector) extractFromBody(record plog.LogRecord) (string, error) {
+	body := record.Body()
+
+	switch body.Type() {
+	case pcommon.ValueTypeStr:
+		// Body is a string - assume it's the EXPLAIN JSON
+		return body.Str(), nil
+
+	case pcommon.ValueTypeMap:
+		// Body is structured - might need to navigate to find EXPLAIN data
+		// For now, try to marshal the entire map as JSON
+		bodyMap := body.Map()
+		bodyBytes, err := json.Marshal(bodyMap.AsRaw())
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal body map: %w", err)
+		}
+		return string(bodyBytes), nil
+
+	default:
+		return "", fmt.Errorf("unsupported body type: %v", body.Type())
+	}
+}
+
+func (c *logsToTracesConnector) extractFromAttribute(record plog.LogRecord) (string, error) {
+	attr, ok := record.Attributes().Get(c.config.Source.AttributeKey)
+	if !ok {
+		return "", nil // Attribute not present
+	}
+
+	if attr.Type() != pcommon.ValueTypeStr {
+		return "", fmt.Errorf("attribute %s is not a string", c.config.Source.AttributeKey)
+	}
+
+	return attr.Str(), nil
+}
+
+// convertToTraces uses otlppgplan library to convert EXPLAIN JSON to traces
+func (c *logsToTracesConnector) convertToTraces(
+	ctx context.Context,
+	explainJSON string,
+	resourceLog plog.ResourceLogs,
+	logRecord plog.LogRecord,
+) (ptrace.Traces, error) {
+	// Build conversion options
+	opts := otlppgplan.ConvertOptions{
+		ServiceName:     c.config.Conversion.ServiceName,
+		IncludePlanJSON: c.config.Conversion.IncludePlanJSON,
+		ExpandLoops:     c.config.Conversion.ExpandLoops,
+	}
+
+	// Extract database name from log attributes if configured
+	if c.config.Conversion.DBNameAttribute != "" {
+		if dbName, ok := logRecord.Attributes().Get(c.config.Conversion.DBNameAttribute); ok {
+			opts.DBName = dbName.Str()
+		}
+	}
+
+	// Call the conversion library
+	traces, err := otlppgplan.ConvertExplainJSONToTraces(ctx, []byte(explainJSON), opts)
+	if err != nil {
+		return ptrace.Traces{}, err
+	}
+
+	// Optionally: propagate resource attributes from logs to traces
+	c.propagateResourceAttributes(resourceLog.Resource(), traces)
+
+	// Optionally: correlate with log's trace context if present
+	c.correlateTraceContext(logRecord, traces)
+
+	return traces, nil
+}
+
+// propagateResourceAttributes copies relevant attributes from log resource to trace resource
+func (c *logsToTracesConnector) propagateResourceAttributes(logResource pcommon.Resource, traces ptrace.Traces) {
+	// Define attributes to propagate (avoid conflicts)
+	propagateKeys := []string{
+		"service.name",
+		"service.namespace",
+		"service.instance.id",
+		"deployment.environment",
+		"host.name",
+	}
+
+	resourceSpans := traces.ResourceSpans()
+	for i := 0; i < resourceSpans.Len(); i++ {
+		traceResource := resourceSpans.At(i).Resource()
+
+		for _, key := range propagateKeys {
+			if val, ok := logResource.Attributes().Get(key); ok {
+				// Only set if not already present in trace resource
+				if _, exists := traceResource.Attributes().Get(key); !exists {
+					val.CopyTo(traceResource.Attributes().PutEmpty(key))
+				}
+			}
+		}
+	}
+}
+
+// correlateTraceContext links generated traces to log's trace context if present
+func (c *logsToTracesConnector) correlateTraceContext(logRecord plog.LogRecord, traces ptrace.Traces) {
+	// If the log has a trace_id and span_id, we could:
+	// 1. Use the same trace_id for generated spans
+	// 2. Make the root span a child of the log's span
+	// 3. Add a span link
+
+	// For now, we'll just add the correlation as an attribute
+	if !logRecord.TraceID().IsEmpty() {
+		resourceSpans := traces.ResourceSpans()
+		for i := 0; i < resourceSpans.Len(); i++ {
+			scopeSpans := resourceSpans.At(i).ScopeSpans()
+			for j := 0; j < scopeSpans.Len(); j++ {
+				spans := scopeSpans.At(j).Spans()
+				for k := 0; k < spans.Len(); k++ {
+					span := spans.At(k)
+					span.Attributes().PutStr("origin.log.trace_id", logRecord.TraceID().String())
+					if !logRecord.SpanID().IsEmpty() {
+						span.Attributes().PutStr("origin.log.span_id", logRecord.SpanID().String())
+					}
+				}
+			}
+		}
+	}
+}
+
+// handleError logs errors based on configuration
+func (c *logsToTracesConnector) handleError(err error) {
+	if c.config.OnError == "log" {
+		c.logger.Error("Error processing log record", zap.Error(err))
+	}
+	// If "drop", silently ignore
+}

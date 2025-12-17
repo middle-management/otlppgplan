@@ -1,0 +1,44 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+connectors:
+  pgplan:
+    source:
+      type: body              # Extract EXPLAIN JSON from log body
+    conversion:
+      service_name: postgresql
+      include_plan_json: false
+      expand_loops: false
+    on_error: log             # Log errors, don't drop silently
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 100
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  otlp:
+    endpoint: localhost:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      # Export logs to pgplan connector (acts as exporter for logs)
+      exporters: [pgplan, debug]
+
+    traces:
+      # Receive from pgplan connector (acts as receiver for traces)
+      receivers: [pgplan]
+      processors: [batch]
+      exporters: [otlp, debug]
