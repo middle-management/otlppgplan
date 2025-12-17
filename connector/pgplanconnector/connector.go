@@ -108,15 +108,28 @@ func (c *logsToTracesConnector) extractFromBody(record plog.LogRecord) (string, 
 	switch body.Type() {
 	case pcommon.ValueTypeStr:
 		// Body is a string - assume it's the EXPLAIN JSON
-		return body.Str(), nil
+		bodyStr := body.Str()
+		c.logger.Debug("Extracting from string body", zap.Int("length", len(bodyStr)))
+		return bodyStr, nil
 
 	case pcommon.ValueTypeMap:
 		// Body is structured - might need to navigate to find EXPLAIN data
 		// For now, try to marshal the entire map as JSON
 		bodyMap := body.Map()
+		c.logger.Debug("Extracting from map body", zap.Int("keys", bodyMap.Len()))
 		bodyBytes, err := json.Marshal(bodyMap.AsRaw())
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal body map: %w", err)
+		}
+		return string(bodyBytes), nil
+
+	case pcommon.ValueTypeSlice:
+		// Body might be an array (EXPLAIN JSON is an array)
+		bodySlice := body.Slice()
+		c.logger.Debug("Extracting from slice body", zap.Int("length", bodySlice.Len()))
+		bodyBytes, err := json.Marshal(bodySlice.AsRaw())
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal body slice: %w", err)
 		}
 		return string(bodyBytes), nil
 
