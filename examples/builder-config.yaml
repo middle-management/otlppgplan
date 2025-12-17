@@ -6,8 +6,8 @@ dist:
   otelcol_version: 0.142.0
 
 replaces:
-  - github.com/middle-management/otlppgplan/connector/pgplanconnector => ../connector/pgplanconnector
-  - github.com/middle-management/otlppgplan => ..
+  - github.com/middle-management/otlppgplan/connector/pgplanconnector => ../../connector/pgplanconnector
+  - github.com/middle-management/otlppgplan => ../..
 
 receivers:
   - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.142.0
