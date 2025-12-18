@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -142,11 +143,12 @@ type ConvertOptions struct {
 
 // Converter holds the state for converting PostgreSQL EXPLAIN JSON to traces
 type Converter struct {
-	opts        ConvertOptions
-	traceID     pcommon.TraceID
-	rootSpanID  pcommon.SpanID
-	baseTime    time.Time
-	idGenerator IDGenerator
+	opts         ConvertOptions
+	traceID      pcommon.TraceID
+	rootSpanID   pcommon.SpanID
+	parentSpanID pcommon.SpanID // Parent span ID from traceparent (if present)
+	baseTime     time.Time
+	idGenerator  IDGenerator
 }
 
 // NewConverter creates a new Converter instance
@@ -177,6 +179,9 @@ func ConvertExplainJSONToTraces(ctx context.Context, explainJSON []byte, opts Co
 // PostgreSQL log prefix pattern: "2025-12-18 08:20:34.162 UTC [3476] LOG:  duration: 2.166 ms  plan:"
 var pgLogPrefixPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+ \[\d+\] LOG:\s+)?duration:\s+([\d.]+)\s+ms\s+plan:\s*`)
 
+// Traceparent pattern in SQL comments: /*traceparent='00-trace_id-span_id-flags'*/
+var traceparentPattern = regexp.MustCompile(`/\*\s*traceparent\s*=\s*'([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})'\s*\*/`)
+
 // parseAutoExplainLog parses a PostgreSQL auto_explain log entry
 // Format: "2025-12-18 08:20:34.162 UTC [3476] LOG:  duration: 2.166 ms  plan:\n\t{...json...}"
 // Returns: JSON bytes, duration in ms, error
@@ -205,6 +210,21 @@ func parseAutoExplainLog(input []byte) (jsonData []byte, durationMS float64, err
 	return jsonData, durationMS, nil
 }
 
+// extractTraceparent extracts W3C traceparent from SQL comment
+// Format: /*traceparent='00-trace_id-span_id-flags'*/
+// Returns: trace_id (32 hex chars), span_id (16 hex chars), or empty strings if not found
+func extractTraceparent(queryText string) (traceID string, spanID string) {
+	match := traceparentPattern.FindStringSubmatch(queryText)
+	if len(match) >= 4 {
+		// match[1] = version (00)
+		// match[2] = trace_id (32 hex)
+		// match[3] = span_id (16 hex)
+		// match[4] = flags (02)
+		return match[2], match[3]
+	}
+	return "", ""
+}
+
 // Convert performs the conversion using the converter's options
 func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Traces, error) {
 	// Parse auto_explain log format (with optional PostgreSQL log prefix)
@@ -220,6 +240,23 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 		// Use the query text from the JSON
 		if c.opts.Statement == "" {
 			c.opts.Statement = autoExplain.QueryText
+		}
+
+		// Extract traceparent from SQL comment if present
+		if traceIDHex, spanIDHex := extractTraceparent(autoExplain.QueryText); traceIDHex != "" {
+			// Parse trace ID (32 hex chars = 16 bytes)
+			if traceIDBytes, err := hex.DecodeString(traceIDHex); err == nil && len(traceIDBytes) == 16 {
+				var tid [16]byte
+				copy(tid[:], traceIDBytes)
+				c.traceID = pcommon.TraceID(tid)
+			}
+
+			// Parse span ID (16 hex chars = 8 bytes) - this becomes the parent of our root span
+			if spanIDBytes, err := hex.DecodeString(spanIDHex); err == nil && len(spanIDBytes) == 8 {
+				var sid [8]byte
+				copy(sid[:], spanIDBytes)
+				c.parentSpanID = pcommon.SpanID(sid)
+			}
 		}
 
 		// If we extracted duration from log prefix and there's no execution time in JSON, use it
@@ -304,6 +341,10 @@ func (c *Converter) convertFromRoot(ctx context.Context, root ExplainRoot, planJ
 	q := spans.AppendEmpty()
 	q.SetTraceID(traceID)
 	q.SetSpanID(rootSpanID)
+	// If we have a parent span ID from traceparent, set it
+	if !c.parentSpanID.IsEmpty() {
+		q.SetParentSpanID(c.parentSpanID)
+	}
 	q.SetName(querySpanName(c.opts.Operation))
 	q.SetKind(ptrace.SpanKindClient)
 	q.SetStartTimestamp(start)

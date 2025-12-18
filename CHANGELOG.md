@@ -8,8 +8,15 @@
   - Extracts query text from "Query Text" field in auto_explain output
   - Extracts duration from log prefix when available
   - Falls back gracefully to standard EXPLAIN JSON format
+- **Distributed tracing support with W3C traceparent**
+  - Automatically extracts traceparent from SQL comments (e.g., `/*traceparent='00-...-...-01'*/`)
+  - Uses extracted trace ID for generated spans
+  - Sets parent span ID to link database execution to calling service
+  - Enables end-to-end tracing from application through database
 - New `AutoExplainLog` struct for parsing auto_explain format
 - Automatic format detection between auto_explain and EXPLAIN JSON formats
+- New `extractTraceparent()` helper function for parsing W3C traceparent from SQL
+- Added `parentSpanID` field to `Converter` struct
 
 ### Changed
 - `Convert()` method now handles both auto_explain and EXPLAIN JSON formats automatically
