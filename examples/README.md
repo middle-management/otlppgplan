@@ -258,8 +258,32 @@ Enable `auto_explain.log_format = json` in PostgreSQL configuration.
 - Consider sampling if query volume is high
 - Monitor collector resource usage
 
+## Docker Demo
+
+Want to see the complete pipeline in action? Check out the Docker Compose demo:
+
+```bash
+# Start PostgreSQL with auto_explain + collectors + Jaeger
+docker compose up -d --build
+
+# Run test queries
+docker compose exec -T postgres psql -U postgres -d testdb < test-queries.sql
+
+# View traces at http://localhost:16686
+```
+
+See [DOCKER.md](./DOCKER.md) for complete documentation of the Docker setup.
+
+The demo includes:
+- PostgreSQL with auto_explain configured
+- OTel Collector agent collecting logs
+- Custom collector with pgplan connector
+- Jaeger for trace visualization
+- Sample database and queries
+
 ## Next Steps
 
+- Try the Docker demo to see the full pipeline
 - Integrate with your observability backend (Jaeger, Tempo, etc.)
 - Set up log collection from PostgreSQL servers
 - Configure alerting based on query performance patterns

@@ -1,0 +1,186 @@
+services:
+  # PostgreSQL with auto_explain enabled
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-autoexplain
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: testdb
+    ports:
+      - "5432:5432"
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=auto_explain
+      - -c
+      - auto_explain.log_min_duration=0
+      - -c
+      - auto_explain.log_analyze=on
+      - -c
+      - auto_explain.log_buffers=on
+      - -c
+      - auto_explain.log_timing=on
+      - -c
+      - auto_explain.log_format=json
+      - -c
+      - auto_explain.log_nested_statements=on
+      - -c
+      - log_destination=stderr
+      - -c
+      - logging_collector=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    configs:
+      - source: postgres_init
+        target: /docker-entrypoint-initdb.d/init.sql
+
+  # Log forwarder using otel-logger
+  log-forwarder:
+    image: golang:1.25-alpine
+    container_name: log-forwarder
+    command: >
+      sh -c "apk add --no-cache docker-cli &&
+             docker logs -f postgres-autoexplain 2>&1 |
+             go run github.com/middle-management/otel-logger@latest"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-pgplan:4319
+      OTEL_SERVICE_NAME: postgresql
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector-pgplan:
+        condition: service_started
+    restart: unless-stopped
+
+  # Custom collector with pgplan connector
+  otel-collector-pgplan:
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile
+    container_name: otel-collector-pgplan
+    ports:
+      - "4319" # OTLP HTTP receiver
+      - "4317" # OTLP gRPC receiver (for trace export)
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    configs:
+      - source: otel_pgplan_config
+        target: /etc/otel-collector-config.yaml
+
+  # Jaeger for viewing traces
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14250:14250" # gRPC collector
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+configs:
+  postgres_init:
+    content: |
+      -- Initialize test database with sample data
+      CREATE TABLE users (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(100),
+          email VARCHAR(100),
+          created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE orders (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES users(id),
+          total DECIMAL(10, 2),
+          status VARCHAR(20),
+          created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      -- Insert sample data
+      INSERT INTO users (name, email)
+      SELECT 'User ' || i, 'user' || i || '@example.com'
+      FROM generate_series(1, 1000) i;
+
+      INSERT INTO orders (user_id, total, status)
+      SELECT
+          (random() * 999 + 1)::int,
+          (random() * 1000)::decimal(10,2),
+          CASE WHEN random() < 0.3 THEN 'pending'
+               WHEN random() < 0.7 THEN 'completed'
+               ELSE 'cancelled'
+          END
+      FROM generate_series(1, 5000);
+
+      -- Create indexes
+      CREATE INDEX idx_users_email ON users(email);
+      CREATE INDEX idx_orders_user_id ON orders(user_id);
+      CREATE INDEX idx_orders_status ON orders(status);
+      CREATE INDEX idx_orders_created_at ON orders(created_at);
+
+      ANALYZE users;
+      ANALYZE orders;
+
+  otel_pgplan_config:
+    content: |
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4319
+
+      processors:
+        # Extract EXPLAIN JSON from PostgreSQL log lines
+        transform/extract_json:
+          error_mode: ignore
+          log_statements:
+            - context: log
+              statements:
+                # Extract JSON array from log body (strip PostgreSQL log prefix)
+                - set(body, ExtractPatterns(body, "(?s)(\\[.*\\])")[0]) where IsMatch(body, "(?s)\\[.*\\]")
+
+        batch:
+          timeout: 10s
+
+      connectors:
+        pgplan:
+          source:
+            type: body
+          conversion:
+            service_name: postgresql
+            include_plan_json: false
+            expand_loops: false
+          on_error: log
+
+      exporters:
+        debug:
+          verbosity: detailed
+        otlp/jaeger:
+          endpoint: jaeger:4317
+          tls:
+            insecure: true
+
+      service:
+        pipelines:
+          logs:
+            receivers: [otlp]
+            processors: [transform/extract_json]
+            exporters: [pgplan, debug]
+          traces:
+            receivers: [pgplan]
+            processors: [batch]
+            exporters: [otlp/jaeger, debug]
+
+networks:
+  default:
+    name: pgplan-demo

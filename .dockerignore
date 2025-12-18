@@ -1,0 +1,21 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Examples build artifacts
+examples/dist/
+examples/*.log
+
+# Test data
+testdata/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

@@ -27,6 +27,19 @@ go get github.com/middle-management/otlppgplan
 
 ## Quick Start
 
+### Live Demo with Docker
+
+Try the complete pipeline with one command:
+
+```bash
+cd examples
+./demo.sh
+```
+
+This starts PostgreSQL with auto_explain, collectors, and Jaeger. View traces at http://localhost:16686
+
+See [examples/DOCKER.md](examples/DOCKER.md) for details.
+
 ### Basic Usage
 
 ```go
