@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -46,8 +47,11 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 		t.Skip("no test files found in testdata/examples/")
 	}
 
+	logStartRe := regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+ \[\d+\] LOG:`)
+
 	for _, file := range files {
-		if filepath.Ext(file.Name()) != ".json" {
+		ext := filepath.Ext(file.Name())
+		if ext != ".json" && ext != ".txt" {
 			continue
 		}
 
@@ -72,9 +76,28 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 				IDGenerator:     &DeterministicIDGenerator{},
 			}
 
-			traces, err := ConvertExplainJSONToTraces(ctx, content, opts)
-			if err != nil {
-				t.Fatalf("failed to convert JSON to traces for %s: %v", file.Name(), err)
+			sessionCtx := &SessionTraceContext{}
+			traces := ptrace.NewTraces()
+
+			switch ext {
+			case ".json":
+				converted, _, err := ConvertWithSessionContext(ctx, content, opts, sessionCtx)
+				if err != nil {
+					t.Fatalf("failed to convert JSON to traces for %s: %v", file.Name(), err)
+				}
+				converted.ResourceSpans().MoveAndAppendTo(traces.ResourceSpans())
+			case ".txt":
+				entries := splitLogsByPrefix(string(content), logStartRe)
+				if len(entries) == 0 {
+					t.Fatalf("no log entries found in %s", file.Name())
+				}
+				for i, entry := range entries {
+					converted, _, err := ConvertWithSessionContext(ctx, []byte(entry), opts, sessionCtx)
+					if err != nil {
+						t.Fatalf("failed to convert log entry %d in %s: %v", i, file.Name(), err)
+					}
+					converted.ResourceSpans().MoveAndAppendTo(traces.ResourceSpans())
+				}
 			}
 
 			// Verify basic trace structure
@@ -152,4 +175,21 @@ func (d *DeterministicIDGenerator) NewSpanID() pcommon.SpanID {
 	var sid [8]byte
 	binary.LittleEndian.PutUint64(sid[:], uint64(d.i))
 	return pcommon.SpanID(sid)
+}
+
+func splitLogsByPrefix(content string, re *regexp.Regexp) []string {
+	matches := re.FindAllStringIndex(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	var entries []string
+	for i := 0; i < len(matches); i++ {
+		start := matches[i][0]
+		end := len(content)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		entries = append(entries, strings.TrimSpace(content[start:end]))
+	}
+	return entries
 }
