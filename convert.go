@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,20 @@ type ExplainRoot struct {
 	PlanningTime  *float64 `json:"Planning Time,omitempty"`  // ms
 	ExecutionTime *float64 `json:"Execution Time,omitempty"` // ms
 	// There are many more optional keys (Triggers, JIT, Settings, etc.)
+}
+
+// AutoExplainLog is the format output by PostgreSQL auto_explain
+// Example:
+//
+//	{
+//	  "Query Text": "SELECT ...",
+//	  "Plan": { "Node Type": "Seq Scan", ... }
+//	}
+type AutoExplainLog struct {
+	QueryText     string   `json:"Query Text"`
+	Plan          PlanNode `json:"Plan"`
+	PlanningTime  *float64 `json:"Planning Time,omitempty"`  // ms
+	ExecutionTime *float64 `json:"Execution Time,omitempty"` // ms
 }
 
 type PlanNode struct {
@@ -158,10 +174,72 @@ func ConvertExplainJSONToTraces(ctx context.Context, explainJSON []byte, opts Co
 	return converter.Convert(ctx, explainJSON)
 }
 
+// PostgreSQL log prefix pattern: "2025-12-18 08:20:34.162 UTC [3476] LOG:  duration: 2.166 ms  plan:"
+var pgLogPrefixPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+ \[\d+\] LOG:\s+)?duration:\s+([\d.]+)\s+ms\s+plan:\s*`)
+
+// parseAutoExplainLog parses a PostgreSQL auto_explain log entry
+// Format: "2025-12-18 08:20:34.162 UTC [3476] LOG:  duration: 2.166 ms  plan:\n\t{...json...}"
+// Returns: JSON bytes, duration in ms, error
+func parseAutoExplainLog(input []byte) (jsonData []byte, durationMS float64, err error) {
+	// Find the log prefix and extract duration
+	match := pgLogPrefixPattern.FindSubmatch(input)
+	if match != nil {
+		// Extract duration from capture group 2
+		durationStr := string(match[2])
+		durationMS, err = strconv.ParseFloat(durationStr, 64)
+		if err != nil {
+			return nil, 0, fmt.Errorf("parse duration: %w", err)
+		}
+
+		// Remove the prefix, leaving just the JSON
+		jsonData = pgLogPrefixPattern.ReplaceAll(input, []byte{})
+	} else {
+		// No prefix found, assume it's just JSON
+		jsonData = input
+		durationMS = 0
+	}
+
+	// Clean up whitespace (tabs, newlines) from the JSON
+	jsonData = []byte(strings.TrimSpace(string(jsonData)))
+
+	return jsonData, durationMS, nil
+}
+
 // Convert performs the conversion using the converter's options
 func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Traces, error) {
+	// Parse auto_explain log format (with optional PostgreSQL log prefix)
+	cleanJSON, logDurationMS, err := parseAutoExplainLog(explainJSON)
+	if err != nil {
+		return ptrace.Traces{}, fmt.Errorf("parse auto_explain log: %w", err)
+	}
+
+	// Try to parse as auto_explain format first (single object with "Query Text")
+	var autoExplain AutoExplainLog
+	if err := json.Unmarshal(cleanJSON, &autoExplain); err == nil && autoExplain.QueryText != "" {
+		// Successfully parsed as auto_explain format
+		// Use the query text from the JSON
+		if c.opts.Statement == "" {
+			c.opts.Statement = autoExplain.QueryText
+		}
+
+		// If we extracted duration from log prefix and there's no execution time in JSON, use it
+		if logDurationMS > 0 && autoExplain.ExecutionTime == nil {
+			autoExplain.ExecutionTime = &logDurationMS
+		}
+
+		// Convert to ExplainRoot format
+		root := ExplainRoot{
+			Plan:          autoExplain.Plan,
+			PlanningTime:  autoExplain.PlanningTime,
+			ExecutionTime: autoExplain.ExecutionTime,
+		}
+
+		return c.convertFromRoot(ctx, root, cleanJSON)
+	}
+
+	// Fall back to original array format: [ { "Plan": {...}, "Execution Time": ... } ]
 	var doc ExplainDocument
-	if err := json.Unmarshal(explainJSON, &doc); err != nil {
+	if err := json.Unmarshal(cleanJSON, &doc); err != nil {
 		return ptrace.Traces{}, fmt.Errorf("parse explain json: %w", err)
 	}
 	if len(doc) == 0 {
@@ -169,6 +247,17 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 	}
 
 	root := doc[0]
+
+	// If we extracted duration from log prefix and there's no execution time in JSON, use it
+	if logDurationMS > 0 && root.ExecutionTime == nil {
+		root.ExecutionTime = &logDurationMS
+	}
+
+	return c.convertFromRoot(ctx, root, cleanJSON)
+}
+
+// convertFromRoot performs the conversion from an ExplainRoot structure
+func (c *Converter) convertFromRoot(ctx context.Context, root ExplainRoot, planJSON []byte) (ptrace.Traces, error) {
 
 	tr := ptrace.NewTraces()
 	rs := tr.ResourceSpans().AppendEmpty()
@@ -245,7 +334,7 @@ func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Tra
 	}
 	if c.opts.IncludePlanJSON {
 		// Warning: can be extremely large; consider only attaching for slow queries.
-		attrs.PutStr("db.postgresql.plan_json", string(explainJSON))
+		attrs.PutStr("db.postgresql.plan_json", string(planJSON))
 	}
 
 	execStart := start

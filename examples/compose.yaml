@@ -140,19 +140,15 @@ configs:
               endpoint: 0.0.0.0:4319
 
       processors:
-        # Extract EXPLAIN JSON from PostgreSQL log lines
-        transform/extract_json:
-          error_mode: ignore
-          log_statements:
-            - context: log
-              statements:
-                # Extract JSON array from log body (strip PostgreSQL log prefix)
-                - set(body, ExtractPatterns(body, "(?s)(\\[.*\\])")[0]) where IsMatch(body, "(?s)\\[.*\\]")
-
         batch:
           timeout: 10s
 
       connectors:
+        # Converts PostgreSQL auto_explain logs to traces
+        # Handles both formats:
+        # - Auto_explain: {"Query Text": "...", "Plan": {...}}
+        # - EXPLAIN JSON: [{"Plan": {...}, "Execution Time": ...}]
+        # Also strips PostgreSQL log prefix (timestamp, duration, etc.)
         pgplan:
           source:
             type: body
@@ -174,7 +170,6 @@ configs:
         pipelines:
           logs:
             receivers: [otlp]
-            processors: [transform/extract_json]
             exporters: [pgplan, debug]
           traces:
             receivers: [pgplan]

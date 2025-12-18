@@ -11,7 +11,10 @@ Each plan node becomes a span in the trace, with timing information, cost estima
 ## Features
 
 - **Complete EXPLAIN Support**: Handles all PostgreSQL plan node types (Seq Scan, Index Scan, Joins, Aggregates, CTEs, etc.)
+- **Auto_explain Format**: Natively parses PostgreSQL auto_explain logs with log prefix and "Query Text" field
 - **Accurate Timing**: Converts actual execution times to wall-clock trace timestamps
+- **Query Text Extraction**: Automatically extracts and includes SQL query text as span attribute
+- **Duration Parsing**: Extracts duration from PostgreSQL log prefix when available
 - **Loop Handling**: Properly scales timing for nodes with `Actual Loops > 1`
 - **CTE Deduplication**: Avoids double-counting CTE initialization costs
 - **Parallel Queries**: Captures worker information and parallel execution details
@@ -39,6 +42,53 @@ cd examples
 This starts PostgreSQL with auto_explain, collectors, and Jaeger. View traces at http://localhost:16686
 
 See [examples/DOCKER.md](examples/DOCKER.md) for details.
+
+## Supported Input Formats
+
+The library automatically detects and handles multiple input formats:
+
+### 1. PostgreSQL auto_explain logs (recommended)
+
+PostgreSQL auto_explain logs with the full log prefix and "Query Text" field:
+
+```
+2025-12-18 08:20:34.162 UTC [3476] LOG:  duration: 2.166 ms  plan:
+	{
+	  "Query Text": "SELECT o.order_id, o.customer_id, c.name\n           FROM orders o\n           JOIN customers c ON o.customer_id = c.customer_id\n           WHERE o.order_date > '2024-01-01';",
+	  "Plan": {
+	    "Node Type": "Hash Join",
+	    "Startup Cost": 22.50,
+	    "Total Cost": 86.62,
+	    ...
+	  }
+	}
+```
+
+**Benefits**: Query text and duration are automatically extracted from the log.
+
+### 2. EXPLAIN (FORMAT JSON) output
+
+Standard PostgreSQL EXPLAIN JSON output (array format):
+
+```json
+[{
+  "Plan": {
+    "Node Type": "Seq Scan",
+    "Relation Name": "users",
+    ...
+  },
+  "Planning Time": 0.833,
+  "Execution Time": 5.5
+}]
+```
+
+**Use case**: Direct EXPLAIN output from PostgreSQL queries.
+
+The library automatically:
+- Strips PostgreSQL log prefixes (timestamps, PIDs, LOG level)
+- Extracts duration from log prefix when available
+- Extracts query text from "Query Text" field
+- Falls back gracefully between formats
 
 ### Basic Usage
 
