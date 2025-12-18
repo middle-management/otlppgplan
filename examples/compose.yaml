@@ -144,9 +144,8 @@ configs:
 
       -- Level 2: Calculate user order statistics
       CREATE OR REPLACE FUNCTION get_user_order_stats(p_user_id INTEGER)
-      RETURNS TABLE(total_orders BIGINT, total_spent DECIMAL, avg_order DECIMAL) AS $$$$func$$$$
+      RETURNS TABLE(total_orders BIGINT, total_spent DECIMAL, avg_order DECIMAL) AS $$func$$
       BEGIN
-          RETURN QUERY
           SELECT
               COUNT(*)::BIGINT,
               SUM(total),
@@ -155,14 +154,14 @@ configs:
           WHERE user_id = p_user_id
             AND status = 'completed';
       END;
-      $$$$func$$$$ LANGUAGE plpgsql;
+      $$func$$ LANGUAGE plpgsql;
 
       -- Level 1: Process order (calls other functions)
       CREATE OR REPLACE FUNCTION process_order(p_order_id INTEGER)
       RETURNS TABLE(
           order_info TEXT,
           user_stats TEXT
-      ) AS $$$$func$$$$
+      ) AS $$func$$
       DECLARE
           v_user_id INTEGER;
           v_order_details RECORD;
@@ -192,7 +191,7 @@ configs:
                      v_user_stats.total_spent,
                      v_user_stats.avg_order)::TEXT;
       END;
-      $$$$func$$$$ LANGUAGE plpgsql;
+      $$func$$ LANGUAGE plpgsql;
 
       -- Create a test query script with traceparent
       -- This will be in /tmp/test_function_calls.sql inside the container
@@ -209,7 +208,7 @@ configs:
              '/*traceparent=''00-aabbccdd11223344aabbccdd11223344-1122334455667788-01''*/ SELECT * FROM process_order(500);';
 
       -- Output instructions
-      DO $$$$block$$$$
+      DO $$block$$
       BEGIN
           RAISE NOTICE '';
           RAISE NOTICE '=================================================================';
@@ -232,7 +231,7 @@ configs:
           RAISE NOTICE 'View traces at http://localhost:16686';
           RAISE NOTICE '=================================================================';
           RAISE NOTICE '';
-      END $$$$block$$$$;
+      END $$block$$;
 
   otel_pgplan_config:
     content: |
