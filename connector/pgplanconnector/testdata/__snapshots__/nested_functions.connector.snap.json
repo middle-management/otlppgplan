@@ -1,0 +1,1193 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "postgresql" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "otlppgplan" },
+          "spans": [
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0100000000000000",
+              "name": "DB QUERY",
+              "kind": 3,
+              "endTimeUnixNano": "91000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.statement",
+                  "value": {
+                    "stringValue": "SELECT o.id, u.name, o.total\n    FROM orders o\n    JOIN users u ON o.user_id = u.id\n    WHERE o.id = p_order_id"
+                  }
+                },
+                {
+                  "key": "db.postgresql.execution_time_ms",
+                  "value": { "doubleValue": 0.091 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0200000000000000",
+              "parentSpanId": "0100000000000000",
+              "name": "DB EXECUTION",
+              "kind": 1,
+              "endTimeUnixNano": "91000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.execution_time_ms",
+                  "value": { "doubleValue": 0.091 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0300000000000000",
+              "parentSpanId": "0200000000000000",
+              "name": "Nested Loop [Inner]",
+              "kind": 1,
+              "startTimeUnixNano": "85000",
+              "endTimeUnixNano": "100000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.node_type",
+                  "value": { "stringValue": "Nested Loop" }
+                },
+                {
+                  "key": "db.postgresql.join_type",
+                  "value": { "stringValue": "Inner" }
+                },
+                {
+                  "key": "db.postgresql.startup_cost",
+                  "value": { "doubleValue": 0.56 }
+                },
+                {
+                  "key": "db.postgresql.total_cost",
+                  "value": { "doubleValue": 16.61 }
+                },
+                {
+                  "key": "db.postgresql.plan_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.plan_width",
+                  "value": { "doubleValue": 18 }
+                },
+                {
+                  "key": "db.postgresql.actual_startup_time_ms",
+                  "value": { "doubleValue": 0.085 }
+                },
+                {
+                  "key": "db.postgresql.actual_total_time_ms",
+                  "value": { "doubleValue": 0.087 }
+                },
+                {
+                  "key": "db.postgresql.derived_total_time_ms",
+                  "value": { "doubleValue": 0.087 }
+                },
+                {
+                  "key": "db.postgresql.actual_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.actual_loops",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.shared_hit_blocks",
+                  "value": { "doubleValue": 6 }
+                },
+                {
+                  "key": "db.postgresql.shared_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_hit_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.exclusive_time_ms",
+                  "value": { "doubleValue": 0.015 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0400000000000000",
+              "parentSpanId": "0300000000000000",
+              "name": "Index Scan orders (orders_pkey)",
+              "kind": 1,
+              "startTimeUnixNano": "42000",
+              "endTimeUnixNano": "86000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.node_type",
+                  "value": { "stringValue": "Index Scan" }
+                },
+                {
+                  "key": "db.postgresql.relation",
+                  "value": { "stringValue": "orders" }
+                },
+                {
+                  "key": "db.postgresql.alias",
+                  "value": { "stringValue": "o" }
+                },
+                {
+                  "key": "db.postgresql.index",
+                  "value": { "stringValue": "orders_pkey" }
+                },
+                {
+                  "key": "db.postgresql.parent_relationship",
+                  "value": { "stringValue": "Outer" }
+                },
+                {
+                  "key": "db.postgresql.startup_cost",
+                  "value": { "doubleValue": 0.28 }
+                },
+                {
+                  "key": "db.postgresql.total_cost",
+                  "value": { "doubleValue": 8.3 }
+                },
+                {
+                  "key": "db.postgresql.plan_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.plan_width",
+                  "value": { "doubleValue": 14 }
+                },
+                {
+                  "key": "db.postgresql.actual_startup_time_ms",
+                  "value": { "doubleValue": 0.042 }
+                },
+                {
+                  "key": "db.postgresql.actual_total_time_ms",
+                  "value": { "doubleValue": 0.044 }
+                },
+                {
+                  "key": "db.postgresql.derived_total_time_ms",
+                  "value": { "doubleValue": 0.044 }
+                },
+                {
+                  "key": "db.postgresql.actual_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.actual_loops",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.rows_removed_by_index_recheck",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_hit_blocks",
+                  "value": { "doubleValue": 3 }
+                },
+                {
+                  "key": "db.postgresql.shared_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_hit_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_written_blocks",
+                  "value": { "doubleValue": 0 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0500000000000000",
+              "parentSpanId": "0300000000000000",
+              "name": "Index Scan users (users_pkey)",
+              "kind": 1,
+              "startTimeUnixNano": "28000",
+              "endTimeUnixNano": "56000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.node_type",
+                  "value": { "stringValue": "Index Scan" }
+                },
+                {
+                  "key": "db.postgresql.relation",
+                  "value": { "stringValue": "users" }
+                },
+                {
+                  "key": "db.postgresql.alias",
+                  "value": { "stringValue": "u" }
+                },
+                {
+                  "key": "db.postgresql.index",
+                  "value": { "stringValue": "users_pkey" }
+                },
+                {
+                  "key": "db.postgresql.parent_relationship",
+                  "value": { "stringValue": "Inner" }
+                },
+                {
+                  "key": "db.postgresql.startup_cost",
+                  "value": { "doubleValue": 0.28 }
+                },
+                {
+                  "key": "db.postgresql.total_cost",
+                  "value": { "doubleValue": 8.29 }
+                },
+                {
+                  "key": "db.postgresql.plan_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.plan_width",
+                  "value": { "doubleValue": 12 }
+                },
+                {
+                  "key": "db.postgresql.actual_startup_time_ms",
+                  "value": { "doubleValue": 0.028 }
+                },
+                {
+                  "key": "db.postgresql.actual_total_time_ms",
+                  "value": { "doubleValue": 0.028 }
+                },
+                {
+                  "key": "db.postgresql.derived_total_time_ms",
+                  "value": { "doubleValue": 0.028 }
+                },
+                {
+                  "key": "db.postgresql.actual_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.actual_loops",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.rows_removed_by_index_recheck",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_hit_blocks",
+                  "value": { "doubleValue": 3 }
+                },
+                {
+                  "key": "db.postgresql.shared_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_hit_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_written_blocks",
+                  "value": { "doubleValue": 0 }
+                }
+              ],
+              "status": {}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "postgresql" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "otlppgplan" },
+          "spans": [
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0600000000000000",
+              "parentSpanId": "0100000000000000",
+              "name": "DB QUERY",
+              "kind": 3,
+              "startTimeUnixNano": "41000",
+              "endTimeUnixNano": "1936000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.statement",
+                  "value": {
+                    "stringValue": "SELECT *                          FROM get_order_details(p_order_id)"
+                  }
+                },
+                {
+                  "key": "db.postgresql.execution_time_ms",
+                  "value": { "doubleValue": 1.895 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0700000000000000",
+              "parentSpanId": "0600000000000000",
+              "name": "DB EXECUTION",
+              "kind": 1,
+              "startTimeUnixNano": "41000",
+              "endTimeUnixNano": "1936000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.execution_time_ms",
+                  "value": { "doubleValue": 1.895 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0800000000000000",
+              "parentSpanId": "0700000000000000",
+              "name": "Function Scan",
+              "kind": 1,
+              "startTimeUnixNano": "1924000",
+              "endTimeUnixNano": "3807000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.node_type",
+                  "value": { "stringValue": "Function Scan" }
+                },
+                {
+                  "key": "db.postgresql.alias",
+                  "value": { "stringValue": "get_order_details" }
+                },
+                {
+                  "key": "db.postgresql.startup_cost",
+                  "value": { "doubleValue": 0.25 }
+                },
+                {
+                  "key": "db.postgresql.total_cost",
+                  "value": { "doubleValue": 10.25 }
+                },
+                {
+                  "key": "db.postgresql.plan_rows",
+                  "value": { "doubleValue": 1000 }
+                },
+                {
+                  "key": "db.postgresql.plan_width",
+                  "value": { "doubleValue": 68 }
+                },
+                {
+                  "key": "db.postgresql.actual_startup_time_ms",
+                  "value": { "doubleValue": 1.883 }
+                },
+                {
+                  "key": "db.postgresql.actual_total_time_ms",
+                  "value": { "doubleValue": 1.883 }
+                },
+                {
+                  "key": "db.postgresql.derived_total_time_ms",
+                  "value": { "doubleValue": 1.883 }
+                },
+                {
+                  "key": "db.postgresql.actual_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.actual_loops",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.shared_hit_blocks",
+                  "value": { "doubleValue": 18 }
+                },
+                {
+                  "key": "db.postgresql.shared_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_hit_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_written_blocks",
+                  "value": { "doubleValue": 0 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0900000000000000",
+              "parentSpanId": "0600000000000000",
+              "name": "FUNC process_order",
+              "kind": 1,
+              "startTimeUnixNano": "41000",
+              "endTimeUnixNano": "1936000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.function",
+                  "value": { "stringValue": "process_order" }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0a00000000000000",
+              "parentSpanId": "0900000000000000",
+              "name": "FUNC get_order_details",
+              "kind": 1,
+              "startTimeUnixNano": "41000",
+              "endTimeUnixNano": "1936000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.function",
+                  "value": { "stringValue": "get_order_details" }
+                }
+              ],
+              "status": {}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "postgresql" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "otlppgplan" },
+          "spans": [
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0b00000000000000",
+              "parentSpanId": "0600000000000000",
+              "name": "DB QUERY",
+              "kind": 3,
+              "startTimeUnixNano": "71000",
+              "endTimeUnixNano": "89000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.statement",
+                  "value": {
+                    "stringValue": "SELECT user_id                    FROM orders\n    WHERE id = p_order_id"
+                  }
+                },
+                {
+                  "key": "db.postgresql.execution_time_ms",
+                  "value": { "doubleValue": 0.018 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0c00000000000000",
+              "parentSpanId": "0b00000000000000",
+              "name": "DB EXECUTION",
+              "kind": 1,
+              "startTimeUnixNano": "71000",
+              "endTimeUnixNano": "89000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.execution_time_ms",
+                  "value": { "doubleValue": 0.018 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0d00000000000000",
+              "parentSpanId": "0c00000000000000",
+              "name": "Index Scan orders (orders_pkey)",
+              "kind": 1,
+              "startTimeUnixNano": "88000",
+              "endTimeUnixNano": "105000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.node_type",
+                  "value": { "stringValue": "Index Scan" }
+                },
+                {
+                  "key": "db.postgresql.relation",
+                  "value": { "stringValue": "orders" }
+                },
+                {
+                  "key": "db.postgresql.alias",
+                  "value": { "stringValue": "orders" }
+                },
+                {
+                  "key": "db.postgresql.index",
+                  "value": { "stringValue": "orders_pkey" }
+                },
+                {
+                  "key": "db.postgresql.startup_cost",
+                  "value": { "doubleValue": 0.28 }
+                },
+                {
+                  "key": "db.postgresql.total_cost",
+                  "value": { "doubleValue": 8.3 }
+                },
+                {
+                  "key": "db.postgresql.plan_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.plan_width",
+                  "value": { "doubleValue": 4 }
+                },
+                {
+                  "key": "db.postgresql.actual_startup_time_ms",
+                  "value": { "doubleValue": 0.017 }
+                },
+                {
+                  "key": "db.postgresql.actual_total_time_ms",
+                  "value": { "doubleValue": 0.017 }
+                },
+                {
+                  "key": "db.postgresql.derived_total_time_ms",
+                  "value": { "doubleValue": 0.017 }
+                },
+                {
+                  "key": "db.postgresql.actual_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.actual_loops",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.rows_removed_by_index_recheck",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_hit_blocks",
+                  "value": { "doubleValue": 3 }
+                },
+                {
+                  "key": "db.postgresql.shared_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_hit_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_written_blocks",
+                  "value": { "doubleValue": 0 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0e00000000000000",
+              "parentSpanId": "0b00000000000000",
+              "name": "FUNC process_order",
+              "kind": 1,
+              "startTimeUnixNano": "71000",
+              "endTimeUnixNano": "89000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.function",
+                  "value": { "stringValue": "process_order" }
+                }
+              ],
+              "status": {}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "postgresql" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "otlppgplan" },
+          "spans": [
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "0f00000000000000",
+              "parentSpanId": "0b00000000000000",
+              "name": "DB QUERY",
+              "kind": 3,
+              "startTimeUnixNano": "138000",
+              "endTimeUnixNano": "267000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.statement",
+                  "value": {
+                    "stringValue": "SELECT\n        COUNT(*)::BIGINT,\n        SUM(total),\n        AVG(total)\n    FROM orders\n    WHERE user_id = p_user_id\n      AND status = 'completed'"
+                  }
+                },
+                {
+                  "key": "db.postgresql.execution_time_ms",
+                  "value": { "doubleValue": 0.129 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "1000000000000000",
+              "parentSpanId": "0f00000000000000",
+              "name": "DB EXECUTION",
+              "kind": 1,
+              "startTimeUnixNano": "138000",
+              "endTimeUnixNano": "267000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.execution_time_ms",
+                  "value": { "doubleValue": 0.129 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "1100000000000000",
+              "parentSpanId": "1000000000000000",
+              "name": "Aggregate",
+              "kind": 1,
+              "startTimeUnixNano": "265000",
+              "endTimeUnixNano": "322999",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.node_type",
+                  "value": { "stringValue": "Aggregate" }
+                },
+                {
+                  "key": "db.postgresql.startup_cost",
+                  "value": { "doubleValue": 19.17 }
+                },
+                {
+                  "key": "db.postgresql.total_cost",
+                  "value": { "doubleValue": 19.18 }
+                },
+                {
+                  "key": "db.postgresql.plan_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.plan_width",
+                  "value": { "doubleValue": 72 }
+                },
+                {
+                  "key": "db.postgresql.actual_startup_time_ms",
+                  "value": { "doubleValue": 0.127 }
+                },
+                {
+                  "key": "db.postgresql.actual_total_time_ms",
+                  "value": { "doubleValue": 0.128 }
+                },
+                {
+                  "key": "db.postgresql.derived_total_time_ms",
+                  "value": { "doubleValue": 0.128 }
+                },
+                {
+                  "key": "db.postgresql.actual_rows",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.actual_loops",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.shared_hit_blocks",
+                  "value": { "doubleValue": 8 }
+                },
+                {
+                  "key": "db.postgresql.shared_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_hit_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.exclusive_time_ms",
+                  "value": { "doubleValue": 0.057999999999999996 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "1200000000000000",
+              "parentSpanId": "1100000000000000",
+              "name": "Bitmap Heap Scan orders",
+              "kind": 1,
+              "startTimeUnixNano": "180000",
+              "endTimeUnixNano": "232000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.node_type",
+                  "value": { "stringValue": "Bitmap Heap Scan" }
+                },
+                {
+                  "key": "db.postgresql.relation",
+                  "value": { "stringValue": "orders" }
+                },
+                {
+                  "key": "db.postgresql.alias",
+                  "value": { "stringValue": "orders" }
+                },
+                {
+                  "key": "db.postgresql.parent_relationship",
+                  "value": { "stringValue": "Outer" }
+                },
+                {
+                  "key": "db.postgresql.startup_cost",
+                  "value": { "doubleValue": 4.32 }
+                },
+                {
+                  "key": "db.postgresql.total_cost",
+                  "value": { "doubleValue": 19.16 }
+                },
+                {
+                  "key": "db.postgresql.plan_rows",
+                  "value": { "doubleValue": 2 }
+                },
+                {
+                  "key": "db.postgresql.plan_width",
+                  "value": { "doubleValue": 6 }
+                },
+                {
+                  "key": "db.postgresql.actual_startup_time_ms",
+                  "value": { "doubleValue": 0.042 }
+                },
+                {
+                  "key": "db.postgresql.actual_total_time_ms",
+                  "value": { "doubleValue": 0.07 }
+                },
+                {
+                  "key": "db.postgresql.derived_total_time_ms",
+                  "value": { "doubleValue": 0.07 }
+                },
+                {
+                  "key": "db.postgresql.actual_rows",
+                  "value": { "doubleValue": 3 }
+                },
+                {
+                  "key": "db.postgresql.actual_loops",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.rows_removed_by_filter",
+                  "value": { "doubleValue": 3 }
+                },
+                {
+                  "key": "db.postgresql.rows_removed_by_index_recheck",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_hit_blocks",
+                  "value": { "doubleValue": 8 }
+                },
+                {
+                  "key": "db.postgresql.shared_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_hit_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.exclusive_time_ms",
+                  "value": { "doubleValue": 0.052000000000000005 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "1300000000000000",
+              "parentSpanId": "1200000000000000",
+              "name": "Bitmap Index Scan (idx_orders_user_id)",
+              "kind": 1,
+              "startTimeUnixNano": "156000",
+              "endTimeUnixNano": "174000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.node_type",
+                  "value": { "stringValue": "Bitmap Index Scan" }
+                },
+                {
+                  "key": "db.postgresql.index",
+                  "value": { "stringValue": "idx_orders_user_id" }
+                },
+                {
+                  "key": "db.postgresql.parent_relationship",
+                  "value": { "stringValue": "Outer" }
+                },
+                {
+                  "key": "db.postgresql.startup_cost",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.total_cost",
+                  "value": { "doubleValue": 4.32 }
+                },
+                {
+                  "key": "db.postgresql.plan_rows",
+                  "value": { "doubleValue": 5 }
+                },
+                {
+                  "key": "db.postgresql.plan_width",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.actual_startup_time_ms",
+                  "value": { "doubleValue": 0.018 }
+                },
+                {
+                  "key": "db.postgresql.actual_total_time_ms",
+                  "value": { "doubleValue": 0.018 }
+                },
+                {
+                  "key": "db.postgresql.derived_total_time_ms",
+                  "value": { "doubleValue": 0.018 }
+                },
+                {
+                  "key": "db.postgresql.actual_rows",
+                  "value": { "doubleValue": 6 }
+                },
+                {
+                  "key": "db.postgresql.actual_loops",
+                  "value": { "doubleValue": 1 }
+                },
+                {
+                  "key": "db.postgresql.shared_hit_blocks",
+                  "value": { "doubleValue": 2 }
+                },
+                {
+                  "key": "db.postgresql.shared_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.shared_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_hit_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_dirtied_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.local_written_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_read_blocks",
+                  "value": { "doubleValue": 0 }
+                },
+                {
+                  "key": "db.postgresql.temp_written_blocks",
+                  "value": { "doubleValue": 0 }
+                }
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "01000000000000000100000000000000",
+              "spanId": "1400000000000000",
+              "parentSpanId": "0f00000000000000",
+              "name": "FUNC process_order",
+              "kind": 1,
+              "startTimeUnixNano": "138000",
+              "endTimeUnixNano": "267000",
+              "attributes": [
+                {
+                  "key": "db.system",
+                  "value": { "stringValue": "postgresql" }
+                },
+                {
+                  "key": "db.postgresql.function",
+                  "value": { "stringValue": "process_order" }
+                }
+              ],
+              "status": {}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

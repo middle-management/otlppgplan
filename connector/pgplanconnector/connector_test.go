@@ -2,6 +2,10 @@ package pgplanconnector
 
 import (
 	"context"
+	"encoding/binary"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +16,9 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/connector/connectortest"
 	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
 func TestLogsToTracesConnector(t *testing.T) {
@@ -415,4 +421,208 @@ SELECT * FROM process_order(500);`)
 
 	assert.True(t, foundFunc["FUNC process_order"], "expected outer function span")
 	assert.True(t, foundFunc["FUNC get_order_details"], "expected nested function span")
+}
+
+func TestLogsToTracesConnector_NestedFunctionsSnapshot(t *testing.T) {
+	content, err := os.ReadFile("testdata/nested_functions.txt")
+	require.NoError(t, err)
+
+	entries := splitNestedLogEntries(string(content))
+	require.NotEmpty(t, entries)
+
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	sl := rl.ScopeLogs().AppendEmpty()
+	for _, entry := range entries {
+		lr := sl.LogRecords().AppendEmpty()
+		lr.Body().SetStr(entry)
+	}
+
+	factory := NewFactory()
+	cfg := factory.CreateDefaultConfig().(*Config)
+	tracesSink := &consumertest.TracesSink{}
+
+	conn, err := factory.CreateLogsToTraces(
+		context.Background(),
+		connectortest.NewNopSettings(component.MustNewType("pgplan")),
+		cfg,
+		tracesSink,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, conn.Start(context.Background(), componenttest.NewNopHost()))
+	defer conn.Shutdown(context.Background())
+
+	require.NoError(t, conn.ConsumeLogs(context.Background(), logs))
+
+	assert.Eventually(t, func() bool {
+		return tracesSink.SpanCount() > 0
+	}, time.Second, 10*time.Millisecond)
+
+	allTraces := tracesSink.AllTraces()
+	require.NotEmpty(t, allTraces)
+	uniqueTraceIDs := map[string]struct{}{}
+	for _, tr := range allTraces {
+		rs := tr.ResourceSpans()
+		for i := 0; i < rs.Len(); i++ {
+			ss := rs.At(i).ScopeSpans()
+			for j := 0; j < ss.Len(); j++ {
+				spans := ss.At(j).Spans()
+				for k := 0; k < spans.Len(); k++ {
+					uniqueTraceIDs[spans.At(k).TraceID().String()] = struct{}{}
+				}
+			}
+		}
+	}
+	assert.Len(t, uniqueTraceIDs, 1, "expected all plan logs to share a single trace")
+
+	normalized := normalizeTracesForSnapshot(allTraces)
+
+	jsonBytes, err := (&ptrace.JSONMarshaler{}).MarshalTraces(normalized)
+	require.NoError(t, err)
+
+	snapshotPath := filepath.Join("testdata", "__snapshots__", "nested_functions.connector.snap.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotPath), 0o755))
+
+	compareWithSnapshot(t, snapshotPath, jsonBytes)
+}
+
+func splitNestedLogEntries(content string) []string {
+	re := regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+ \[\d+\] (LOG:|CONTEXT:|ERROR:|HINT:|STATEMENT:)`)
+	matches := re.FindAllStringIndex(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	var entries []string
+	for i := 0; i < len(matches); i++ {
+		start := matches[i][0]
+		end := len(content)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		entries = append(entries, strings.TrimSpace(content[start:end]))
+	}
+	return entries
+}
+
+func normalizeTracesForSnapshot(all []ptrace.Traces) ptrace.Traces {
+	merged := ptrace.NewTraces()
+	for _, tr := range all {
+		tr.ResourceSpans().MoveAndAppendTo(merged.ResourceSpans())
+	}
+	if merged.SpanCount() == 0 {
+		return merged
+	}
+
+	remapTraceAndSpanIDs(merged)
+	normalizeTimestamps(merged)
+	return merged
+}
+
+func remapTraceAndSpanIDs(tr ptrace.Traces) {
+	traceMap := map[string]pcommon.TraceID{}
+	spanMap := map[string]pcommon.SpanID{}
+	var traceCounter uint64 = 1
+	var spanCounter uint64 = 1
+
+	nextTraceID := func(old string) pcommon.TraceID {
+		if tid, ok := traceMap[old]; ok {
+			return tid
+		}
+		var raw [16]byte
+		binary.LittleEndian.PutUint64(raw[:8], traceCounter)
+		binary.LittleEndian.PutUint64(raw[8:], traceCounter)
+		traceCounter++
+		tid := pcommon.TraceID(raw)
+		traceMap[old] = tid
+		return tid
+	}
+
+	nextSpanID := func(old string) pcommon.SpanID {
+		if sid, ok := spanMap[old]; ok {
+			return sid
+		}
+		var raw [8]byte
+		binary.LittleEndian.PutUint64(raw[:], spanCounter)
+		spanCounter++
+		sid := pcommon.SpanID(raw)
+		spanMap[old] = sid
+		return sid
+	}
+
+	rs := tr.ResourceSpans()
+	for i := 0; i < rs.Len(); i++ {
+		ss := rs.At(i).ScopeSpans()
+		for j := 0; j < ss.Len(); j++ {
+			spans := ss.At(j).Spans()
+			for k := 0; k < spans.Len(); k++ {
+				span := spans.At(k)
+				span.SetTraceID(nextTraceID(span.TraceID().String()))
+				if !span.ParentSpanID().IsEmpty() {
+					span.SetParentSpanID(nextSpanID(span.ParentSpanID().String()))
+				}
+				span.SetSpanID(nextSpanID(span.SpanID().String()))
+			}
+		}
+	}
+}
+
+func normalizeTimestamps(tr ptrace.Traces) {
+	var minStart pcommon.Timestamp
+	first := true
+
+	rs := tr.ResourceSpans()
+	for i := 0; i < rs.Len(); i++ {
+		ss := rs.At(i).ScopeSpans()
+		for j := 0; j < ss.Len(); j++ {
+			spans := ss.At(j).Spans()
+			for k := 0; k < spans.Len(); k++ {
+				start := spans.At(k).StartTimestamp()
+				if first || start < minStart {
+					minStart = start
+					first = false
+				}
+			}
+		}
+	}
+
+	if first {
+		return
+	}
+
+	for i := 0; i < rs.Len(); i++ {
+		ss := rs.At(i).ScopeSpans()
+		for j := 0; j < ss.Len(); j++ {
+			spans := ss.At(j).Spans()
+			for k := 0; k < spans.Len(); k++ {
+				span := spans.At(k)
+				start := span.StartTimestamp() - minStart
+				dur := span.EndTimestamp() - span.StartTimestamp()
+				span.SetStartTimestamp(start)
+				span.SetEndTimestamp(start + dur)
+			}
+		}
+	}
+}
+
+func compareWithSnapshot(t *testing.T, snapshotPath string, actual []byte) {
+	t.Helper()
+
+	if expected, err := os.ReadFile(snapshotPath); err == nil {
+		if string(expected) != string(actual) {
+			if os.Getenv("SNAPSHOT_UPDATE") == "1" {
+				require.NoError(t, os.WriteFile(snapshotPath, actual, 0o644))
+				t.Logf("Updated snapshot file: %s", snapshotPath)
+			} else {
+				t.Fatalf("snapshot mismatch for %s; run SNAPSHOT_UPDATE=1 go test ./connector/pgplanconnector -run %s", snapshotPath, t.Name())
+			}
+		}
+		return
+	} else if !os.IsNotExist(err) {
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, os.WriteFile(snapshotPath, actual, 0o644))
+	t.Logf("Created snapshot file: %s", snapshotPath)
 }

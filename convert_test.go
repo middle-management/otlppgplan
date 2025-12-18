@@ -92,7 +92,11 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 					t.Fatalf("no log entries found in %s", file.Name())
 				}
 				for i, entry := range entries {
-					converted, _, err := ConvertWithSessionContext(ctx, []byte(entry), opts, sessionCtx)
+					trimmed := truncateToPlanSection(entry)
+					if trimmed == "" {
+						continue
+					}
+					converted, _, err := ConvertWithSessionContext(ctx, []byte(trimmed), opts, sessionCtx)
 					if err != nil {
 						t.Fatalf("failed to convert log entry %d in %s: %v", i, file.Name(), err)
 					}
@@ -192,4 +196,30 @@ func splitLogsByPrefix(content string, re *regexp.Regexp) []string {
 		entries = append(entries, strings.TrimSpace(content[start:end]))
 	}
 	return entries
+}
+
+// truncateToPlanSection keeps only the log prefix plus the JSON plan body,
+// discarding trailing CONTEXT/ERROR/HINT lines that are not part of the JSON.
+func truncateToPlanSection(entry string) string {
+	start := strings.Index(entry, "{")
+	if start == -1 {
+		return entry
+	}
+
+	depth := 0
+	for i := start; i < len(entry); i++ {
+		switch entry[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+			if depth == 0 {
+				return entry[:i+1]
+			}
+		}
+	}
+
+	return entry
 }

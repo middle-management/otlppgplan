@@ -220,6 +220,15 @@ func ConvertWithSessionContext(ctx context.Context, explainJSON []byte, opts Con
 	}
 
 	traces, err := converter.Convert(ctx, explainJSON)
+	if err != nil {
+		return ptrace.Traces{}, 0, err
+	}
+
+	if sessionCtx != nil {
+		copy(sessionCtx.TraceID[:], converter.traceID[:])
+		copy(sessionCtx.ParentSpanID[:], converter.rootSpanID[:])
+	}
+
 	return traces, pid, err
 }
 
@@ -366,6 +375,7 @@ func (c *Converter) convertFromRoot(ctx context.Context, root ExplainRoot, planJ
 		traceID = c.traceID
 	} else {
 		traceID = c.idGenerator.NewTraceID()
+		c.traceID = traceID
 	}
 
 	var rootSpanID pcommon.SpanID
@@ -373,6 +383,7 @@ func (c *Converter) convertFromRoot(ctx context.Context, root ExplainRoot, planJ
 		rootSpanID = c.rootSpanID
 	} else {
 		rootSpanID = c.idGenerator.NewSpanID()
+		c.rootSpanID = rootSpanID
 	}
 
 	// Use pre-initialized base time from converter
