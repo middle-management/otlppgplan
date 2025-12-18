@@ -2,6 +2,7 @@ package pgplanconnector
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -345,4 +346,73 @@ func TestLogsToTracesConnector_SessionCorrelation(t *testing.T) {
 		assert.Equal(t, expectedTraceID, traceID)
 	}
 	assert.Equal(t, 3, rootSpansWithParent, "expected one root span per log record to inherit the parent span ID")
+}
+
+func TestLogsToTracesConnector_ContextSeedsTraceparent(t *testing.T) {
+	factory := NewFactory()
+	cfg := factory.CreateDefaultConfig().(*Config)
+	tracesSink := &consumertest.TracesSink{}
+
+	connector, err := factory.CreateLogsToTraces(
+		context.Background(),
+		connectortest.NewNopSettings(component.MustNewType("pgplan")),
+		cfg,
+		tracesSink,
+	)
+	require.NoError(t, err)
+
+	err = connector.Start(context.Background(), componenttest.NewNopHost())
+	require.NoError(t, err)
+	defer connector.Shutdown(context.Background())
+
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	sl := rl.ScopeLogs().AppendEmpty()
+
+	// STATEMENT log with traceparent but no plan JSON. Seeds the session cache.
+	statement := sl.LogRecords().AppendEmpty()
+	statement.Body().SetStr(`2025-12-18 09:21:59.384 UTC [573] STATEMENT: /*traceparent='00-aabbccdd11223344aabbccdd1122334455667788-01'*/
+SELECT * FROM process_order(500);`)
+
+	// CONTEXT log capturing function nesting.
+	contextLog := sl.LogRecords().AppendEmpty()
+	contextLog.Body().SetStr(`2025-12-18 09:23:16.327 UTC [573] CONTEXT:  SQL statement "SELECT o.id, u.name, o.total FROM orders o JOIN users u ON o.user_id = u.id WHERE o.id = p_order_id"
+	PL/pgSQL function get_order_details(integer) line 3 at RETURN QUERY
+	SQL statement "SELECT *                          FROM get_order_details(p_order_id)"
+	PL/pgSQL function process_order(integer) line 8 at SQL statement`)
+
+	// Following auto_explain log lacks traceparent but shares PID.
+	plan := sl.LogRecords().AppendEmpty()
+	plan.Body().SetStr(`2025-12-18 09:23:16.327 UTC [573] LOG:  duration: 0.609 ms  plan:
+{
+  "Query Text": "SELECT o.id, u.name, o.total FROM orders o JOIN users u ON o.user_id = u.id WHERE o.id = p_order_id",
+  "Plan": {"Node Type": "Nested Loop", "Actual Startup Time": 0.605, "Actual Total Time": 0.606, "Actual Rows": 1, "Actual Loops": 1}
+}`)
+
+	err = connector.ConsumeLogs(context.Background(), logs)
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		return tracesSink.SpanCount() > 0
+	}, time.Second, 10*time.Millisecond)
+
+	allTraces := tracesSink.AllTraces()
+	require.NotEmpty(t, allTraces)
+
+	spans := allTraces[0].ResourceSpans().At(0).ScopeSpans().At(0).Spans()
+	require.GreaterOrEqual(t, spans.Len(), 3)
+
+	traceID := spans.At(0).TraceID().String()
+	assert.Equal(t, "aabbccdd11223344aabbccdd11223344", traceID)
+
+	foundFunc := map[string]bool{}
+	for i := 0; i < spans.Len(); i++ {
+		s := spans.At(i)
+		if strings.HasPrefix(s.Name(), "FUNC ") {
+			foundFunc[s.Name()] = true
+		}
+	}
+
+	assert.True(t, foundFunc["FUNC process_order"], "expected outer function span")
+	assert.True(t, foundFunc["FUNC get_order_details"], "expected nested function span")
 }

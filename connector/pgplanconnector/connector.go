@@ -2,8 +2,13 @@ package pgplanconnector
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/middle-management/otlppgplan"
 	"go.opentelemetry.io/collector/component"
@@ -25,12 +30,20 @@ type logsToTracesConnector struct {
 	// traceContextCache stores trace ID and parent span ID by session identifier
 	// Key format: "service.instance.id:pid" or just "pid" if no instance ID
 	traceContextCache map[string]traceContext
+	// functionContextCache stores parsed function call stacks by session (outer->inner)
+	functionContextCache map[string][]string
 }
 
 type traceContext struct {
 	traceID      string
 	parentSpanID string
 }
+
+var (
+	traceparentRegex = regexp.MustCompile(`/\*\s*traceparent\s*=\s*'([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})'\s*\*/`)
+	pidPrefixRegex   = regexp.MustCompile(`\[(\d+)\]`)
+	contextFuncRegex = regexp.MustCompile(`PL/pgSQL function ([^(]+)\(`)
+)
 
 // Capabilities declares that this connector does not mutate logs
 func (c *logsToTracesConnector) Capabilities() consumer.Capabilities {
@@ -41,6 +54,7 @@ func (c *logsToTracesConnector) Capabilities() consumer.Capabilities {
 func (c *logsToTracesConnector) Start(_ context.Context, _ component.Host) error {
 	c.logger.Info("Starting pgplan logs-to-traces connector")
 	c.traceContextCache = make(map[string]traceContext)
+	c.functionContextCache = make(map[string][]string)
 	return nil
 }
 
@@ -66,6 +80,11 @@ func (c *logsToTracesConnector) ConsumeLogs(ctx context.Context, ld plog.Logs) e
 
 			for k := 0; k < logRecords.Len(); k++ {
 				logRecord := logRecords.At(k)
+
+				// Seed session cache from logs that carry traceparent in STATEMENT/CONTEXT
+				// lines even if they don't have EXPLAIN JSON.
+				c.seedTraceContext(resourceLog.Resource(), logRecord)
+				c.seedFunctionContext(resourceLog.Resource(), logRecord)
 
 				// Extract EXPLAIN JSON from log record
 				explainJSON, err := c.extractExplainJSON(logRecord)
@@ -216,6 +235,11 @@ func (c *logsToTracesConnector) convertToTraces(
 		parentSpanID: string(sessionContext.ParentSpanID[:]),
 	}
 
+	// Apply function context as synthetic spans (outer->inner)
+	if funcs, ok := c.functionContextCache[sessionKey]; ok && len(funcs) > 0 {
+		c.applyFunctionContext(traces, funcs)
+	}
+
 	// Optionally: propagate resource attributes from logs to traces
 	c.propagateResourceAttributes(resourceLog.Resource(), traces)
 
@@ -227,6 +251,14 @@ func (c *logsToTracesConnector) convertToTraces(
 
 // buildSessionKey creates a unique key for tracking session trace context
 func (c *logsToTracesConnector) buildSessionKey(resource pcommon.Resource, logRecord plog.LogRecord) string {
+	// Prefer PID from log prefix/attribute if available.
+	if pid := extractPID(logRecord); pid > 0 {
+		if instanceID, ok := resource.Attributes().Get("service.instance.id"); ok {
+			return fmt.Sprintf("%s:pid:%d", instanceID.Str(), pid)
+		}
+		return fmt.Sprintf("pid:%d", pid)
+	}
+
 	// Try to use service.instance.id from resource
 	if instanceID, ok := resource.Attributes().Get("service.instance.id"); ok {
 		return instanceID.Str()
@@ -300,4 +332,140 @@ func (c *logsToTracesConnector) handleError(err error) {
 		c.logger.Error("Error processing log record", zap.Error(err))
 	}
 	// If "drop", silently ignore
+}
+
+// seedTraceContext captures traceparent from non-EXPLAIN logs (STATEMENT/CONTEXT)
+// so nested auto_explain plans for the same PID can reuse the trace.
+func (c *logsToTracesConnector) seedTraceContext(resource pcommon.Resource, logRecord plog.LogRecord) {
+	if logRecord.Body().Type() != pcommon.ValueTypeStr {
+		return
+	}
+
+	body := logRecord.Body().Str()
+	matches := traceparentRegex.FindStringSubmatch(body)
+	if len(matches) < 4 {
+		return
+	}
+
+	traceID := matches[2]
+	spanID := matches[3]
+
+	sessionKey := c.buildSessionKey(resource, logRecord)
+	if sessionKey == "default" {
+		if pid := extractPID(logRecord); pid > 0 {
+			sessionKey = fmt.Sprintf("pid:%d", pid)
+		}
+	}
+
+	// Store raw bytes so ConvertWithSessionContext can reuse them.
+	c.traceContextCache[sessionKey] = traceContext{
+		traceID:      traceID,
+		parentSpanID: spanID,
+	}
+}
+
+// extractPID tries to pull a PID from attributes or the log prefix.
+func extractPID(logRecord plog.LogRecord) int {
+	if pidAttr, ok := logRecord.Attributes().Get("process.pid"); ok {
+		return int(pidAttr.Int())
+	}
+
+	if logRecord.Body().Type() == pcommon.ValueTypeStr {
+		if m := pidPrefixRegex.FindStringSubmatch(logRecord.Body().Str()); len(m) >= 2 {
+			if pid, err := strconv.Atoi(m[1]); err == nil {
+				return pid
+			}
+		}
+	}
+
+	return 0
+}
+
+// seedFunctionContext parses CONTEXT logs to capture PL/pgSQL call stack.
+func (c *logsToTracesConnector) seedFunctionContext(resource pcommon.Resource, logRecord plog.LogRecord) {
+	if logRecord.Body().Type() != pcommon.ValueTypeStr {
+		return
+	}
+
+	body := logRecord.Body().Str()
+	if !strings.Contains(body, "CONTEXT:") {
+		return
+	}
+
+	lines := strings.Split(body, "\n")
+	var funcs []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "PL/pgSQL function") {
+			continue
+		}
+		if m := contextFuncRegex.FindStringSubmatch(line); len(m) >= 2 {
+			funcs = append(funcs, strings.TrimSpace(m[1]))
+		}
+	}
+	if len(funcs) == 0 {
+		return
+	}
+
+	// Reverse to outer -> inner order
+	for i, j := 0, len(funcs)-1; i < j; i, j = i+1, j-1 {
+		funcs[i], funcs[j] = funcs[j], funcs[i]
+	}
+
+	sessionKey := c.buildSessionKey(resource, logRecord)
+	if sessionKey == "default" {
+		if pid := extractPID(logRecord); pid > 0 {
+			sessionKey = fmt.Sprintf("pid:%d", pid)
+		}
+	}
+
+	c.functionContextCache[sessionKey] = funcs
+}
+
+// applyFunctionContext emits synthetic spans for PL/pgSQL functions listed in the context stack.
+func (c *logsToTracesConnector) applyFunctionContext(traces ptrace.Traces, funcs []string) {
+	rs := traces.ResourceSpans()
+	for i := 0; i < rs.Len(); i++ {
+		ss := rs.At(i).ScopeSpans()
+		for j := 0; j < ss.Len(); j++ {
+			spans := ss.At(j).Spans()
+			if spans.Len() == 0 {
+				continue
+			}
+
+			// First span is the query root span.
+			root := spans.At(0)
+			parentID := root.SpanID()
+			traceID := root.TraceID()
+			start := root.StartTimestamp()
+			end := root.EndTimestamp()
+
+			for _, fn := range funcs {
+				s := spans.AppendEmpty()
+				s.SetTraceID(traceID)
+				s.SetSpanID(newSpanID())
+				s.SetParentSpanID(parentID)
+				s.SetName("FUNC " + fn)
+				s.SetKind(ptrace.SpanKindInternal)
+				s.SetStartTimestamp(start)
+				s.SetEndTimestamp(end)
+
+				a := s.Attributes()
+				a.PutStr("db.system", "postgresql")
+				a.PutStr("db.postgresql.function", fn)
+
+				parentID = s.SpanID()
+			}
+		}
+	}
+}
+
+// newSpanID provides a non-zero span ID for synthetic spans.
+func newSpanID() pcommon.SpanID {
+	var sid [8]byte
+	_, _ = rand.Read(sid[:])
+	if binary.LittleEndian.Uint64(sid[:]) == 0 {
+		sid[0] = 1
+	}
+	return pcommon.SpanID(sid)
 }
