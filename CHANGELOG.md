@@ -13,6 +13,13 @@
   - Uses extracted trace ID for generated spans
   - Sets parent span ID to link database execution to calling service
   - Enables end-to-end tracing from application through database
+- **Session-based trace correlation**
+  - Extracts PostgreSQL PID from log prefix (e.g., `[1001]`)
+  - Maintains trace context cache per session (PID)
+  - Automatically correlates function calls and nested queries to parent trace
+  - No traceparent needed for queries inside PostgreSQL functions
+  - New `ConvertWithSessionContext()` function for session-aware conversion
+  - New `SessionTraceContext` struct for managing session trace state
 - New `AutoExplainLog` struct for parsing auto_explain format
 - Automatic format detection between auto_explain and EXPLAIN JSON formats
 - New `extractTraceparent()` helper function for parsing W3C traceparent from SQL

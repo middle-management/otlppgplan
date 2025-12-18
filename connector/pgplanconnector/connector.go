@@ -22,6 +22,14 @@ type logsToTracesConnector struct {
 	config       *Config
 	logger       *zap.Logger
 	nextConsumer consumer.Traces
+	// traceContextCache stores trace ID and parent span ID by session identifier
+	// Key format: "service.instance.id:pid" or just "pid" if no instance ID
+	traceContextCache map[string]traceContext
+}
+
+type traceContext struct {
+	traceID      string
+	parentSpanID string
 }
 
 // Capabilities declares that this connector does not mutate logs
@@ -32,6 +40,7 @@ func (c *logsToTracesConnector) Capabilities() consumer.Capabilities {
 // Start is called when the connector starts
 func (c *logsToTracesConnector) Start(_ context.Context, _ component.Host) error {
 	c.logger.Info("Starting pgplan logs-to-traces connector")
+	c.traceContextCache = make(map[string]traceContext)
 	return nil
 }
 
@@ -172,10 +181,39 @@ func (c *logsToTracesConnector) convertToTraces(
 		}
 	}
 
-	// Call the conversion library
-	traces, err := otlppgplan.ConvertExplainJSONToTraces(ctx, []byte(explainJSON), opts)
+	// Build session key for trace context caching
+	// Use service.instance.id + process.pid if available, otherwise just use a hash
+	sessionKey := c.buildSessionKey(resourceLog.Resource(), logRecord)
+
+	// Get or create session context
+	sessCtx, ok := c.traceContextCache[sessionKey]
+	if !ok {
+		sessCtx = traceContext{}
+	}
+
+	// Convert with session context
+	var sessionContext otlppgplan.SessionTraceContext
+	// Copy existing trace context if available (stored as raw bytes)
+	if len(sessCtx.traceID) >= 16 {
+		copy(sessionContext.TraceID[:], sessCtx.traceID[:16])
+	}
+	if len(sessCtx.parentSpanID) >= 8 {
+		copy(sessionContext.ParentSpanID[:], sessCtx.parentSpanID[:8])
+	}
+
+	traces, pid, err := otlppgplan.ConvertWithSessionContext(ctx, []byte(explainJSON), opts, &sessionContext)
 	if err != nil {
 		return ptrace.Traces{}, err
+	}
+
+	// Update cache with potentially new trace context
+	if pid > 0 {
+		// Use PID-based key if we extracted it
+		sessionKey = fmt.Sprintf("pid:%d", pid)
+	}
+	c.traceContextCache[sessionKey] = traceContext{
+		traceID:      string(sessionContext.TraceID[:]),
+		parentSpanID: string(sessionContext.ParentSpanID[:]),
 	}
 
 	// Optionally: propagate resource attributes from logs to traces
@@ -185,6 +223,23 @@ func (c *logsToTracesConnector) convertToTraces(
 	c.correlateTraceContext(logRecord, traces)
 
 	return traces, nil
+}
+
+// buildSessionKey creates a unique key for tracking session trace context
+func (c *logsToTracesConnector) buildSessionKey(resource pcommon.Resource, logRecord plog.LogRecord) string {
+	// Try to use service.instance.id from resource
+	if instanceID, ok := resource.Attributes().Get("service.instance.id"); ok {
+		return instanceID.Str()
+	}
+
+	// Try to use process.pid from log attributes
+	if pid, ok := logRecord.Attributes().Get("process.pid"); ok {
+		return fmt.Sprintf("pid:%d", pid.Int())
+	}
+
+	// Fallback: use a combination of available attributes
+	// This is a best-effort approach
+	return "default"
 }
 
 // propagateResourceAttributes copies relevant attributes from log resource to trace resource

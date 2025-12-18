@@ -13,6 +13,7 @@ Each plan node becomes a span in the trace, with timing information, cost estima
 - **Complete EXPLAIN Support**: Handles all PostgreSQL plan node types (Seq Scan, Index Scan, Joins, Aggregates, CTEs, etc.)
 - **Auto_explain Format**: Natively parses PostgreSQL auto_explain logs with log prefix and "Query Text" field
 - **Distributed Tracing**: Automatically extracts W3C traceparent from SQL comments to link database queries to parent traces
+- **Session Correlation**: Tracks trace context by PostgreSQL PID to correlate function calls and nested queries
 - **Accurate Timing**: Converts actual execution times to wall-clock trace timestamps
 - **Query Text Extraction**: Automatically extracts and includes SQL query text as span attribute
 - **Duration Parsing**: Extracts duration from PostgreSQL log prefix when available
@@ -108,6 +109,7 @@ WHERE o.order_date > '2024-01-01';
 - Root query span becomes a child of the parent span
 - Complete end-to-end tracing from application through database execution
 - Works seamlessly with OpenTelemetry instrumentation
+- Automatic session correlation for function calls (see [SESSION_CORRELATION.md](SESSION_CORRELATION.md))
 
 ### Basic Usage
 

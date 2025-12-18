@@ -176,24 +176,77 @@ func ConvertExplainJSONToTraces(ctx context.Context, explainJSON []byte, opts Co
 	return converter.Convert(ctx, explainJSON)
 }
 
+// SessionTraceContext holds trace context information for correlating multiple queries in a session
+type SessionTraceContext struct {
+	TraceID      [16]byte // Trace ID to use for this session
+	ParentSpanID [8]byte  // Parent span ID for root spans
+}
+
+// ConvertWithSessionContext converts EXPLAIN JSON using session-level trace context
+// This allows multiple queries from the same session (e.g., function calls) to share the same trace
+func ConvertWithSessionContext(ctx context.Context, explainJSON []byte, opts ConvertOptions, sessionCtx *SessionTraceContext) (ptrace.Traces, int, error) {
+	converter := NewConverter(opts)
+
+	// Parse to extract PID and check for traceparent
+	cleanJSON, _, pid, err := parseAutoExplainLog(explainJSON)
+	if err != nil {
+		return ptrace.Traces{}, 0, fmt.Errorf("parse auto_explain log: %w", err)
+	}
+
+	// Try to parse as auto_explain format to check for traceparent
+	var autoExplain AutoExplainLog
+	hasTraceparent := false
+	if err := json.Unmarshal(cleanJSON, &autoExplain); err == nil && autoExplain.QueryText != "" {
+		if traceIDHex, spanIDHex := extractTraceparent(autoExplain.QueryText); traceIDHex != "" {
+			// This query has a traceparent - update session context
+			if traceIDBytes, err := hex.DecodeString(traceIDHex); err == nil && len(traceIDBytes) == 16 {
+				copy(sessionCtx.TraceID[:], traceIDBytes)
+				hasTraceparent = true
+			}
+			if spanIDBytes, err := hex.DecodeString(spanIDHex); err == nil && len(spanIDBytes) == 8 {
+				copy(sessionCtx.ParentSpanID[:], spanIDBytes)
+			}
+		}
+	}
+
+	// Use session context if we don't have a traceparent in this specific query
+	if !hasTraceparent && sessionCtx != nil {
+		// Check if session context has a trace ID
+		var zeroTraceID [16]byte
+		if sessionCtx.TraceID != zeroTraceID {
+			converter.traceID = pcommon.TraceID(sessionCtx.TraceID)
+			converter.parentSpanID = pcommon.SpanID(sessionCtx.ParentSpanID)
+		}
+	}
+
+	traces, err := converter.Convert(ctx, explainJSON)
+	return traces, pid, err
+}
+
 // PostgreSQL log prefix pattern: "2025-12-18 08:20:34.162 UTC [3476] LOG:  duration: 2.166 ms  plan:"
-var pgLogPrefixPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+ \[\d+\] LOG:\s+)?duration:\s+([\d.]+)\s+ms\s+plan:\s*`)
+var pgLogPrefixPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+ \[(\d+)\] LOG:\s+)?duration:\s+([\d.]+)\s+ms\s+plan:\s*`)
 
 // Traceparent pattern in SQL comments: /*traceparent='00-trace_id-span_id-flags'*/
 var traceparentPattern = regexp.MustCompile(`/\*\s*traceparent\s*=\s*'([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})'\s*\*/`)
 
 // parseAutoExplainLog parses a PostgreSQL auto_explain log entry
 // Format: "2025-12-18 08:20:34.162 UTC [3476] LOG:  duration: 2.166 ms  plan:\n\t{...json...}"
-// Returns: JSON bytes, duration in ms, error
-func parseAutoExplainLog(input []byte) (jsonData []byte, durationMS float64, err error) {
-	// Find the log prefix and extract duration
+// Returns: JSON bytes, duration in ms, PID (0 if not found), error
+func parseAutoExplainLog(input []byte) (jsonData []byte, durationMS float64, pid int, err error) {
+	// Find the log prefix and extract duration and PID
 	match := pgLogPrefixPattern.FindSubmatch(input)
 	if match != nil {
-		// Extract duration from capture group 2
-		durationStr := string(match[2])
+		// Extract PID from capture group 2 (if present)
+		if len(match) > 2 && len(match[2]) > 0 {
+			pidStr := string(match[2])
+			pid, _ = strconv.Atoi(pidStr) // Ignore error, pid stays 0
+		}
+
+		// Extract duration from capture group 3
+		durationStr := string(match[3])
 		durationMS, err = strconv.ParseFloat(durationStr, 64)
 		if err != nil {
-			return nil, 0, fmt.Errorf("parse duration: %w", err)
+			return nil, 0, 0, fmt.Errorf("parse duration: %w", err)
 		}
 
 		// Remove the prefix, leaving just the JSON
@@ -202,12 +255,13 @@ func parseAutoExplainLog(input []byte) (jsonData []byte, durationMS float64, err
 		// No prefix found, assume it's just JSON
 		jsonData = input
 		durationMS = 0
+		pid = 0
 	}
 
 	// Clean up whitespace (tabs, newlines) from the JSON
 	jsonData = []byte(strings.TrimSpace(string(jsonData)))
 
-	return jsonData, durationMS, nil
+	return jsonData, durationMS, pid, nil
 }
 
 // extractTraceparent extracts W3C traceparent from SQL comment
@@ -228,7 +282,7 @@ func extractTraceparent(queryText string) (traceID string, spanID string) {
 // Convert performs the conversion using the converter's options
 func (c *Converter) Convert(ctx context.Context, explainJSON []byte) (ptrace.Traces, error) {
 	// Parse auto_explain log format (with optional PostgreSQL log prefix)
-	cleanJSON, logDurationMS, err := parseAutoExplainLog(explainJSON)
+	cleanJSON, logDurationMS, _, err := parseAutoExplainLog(explainJSON)
 	if err != nil {
 		return ptrace.Traces{}, fmt.Errorf("parse auto_explain log: %w", err)
 	}

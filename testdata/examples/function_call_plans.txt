@@ -1,0 +1,28 @@
+2025-12-18 10:15:01.123 UTC [1001] LOG:  duration: 5.234 ms  plan:
+	{
+	  "Query Text": "/*traceparent='00-aabbccdd11223344aabbccdd11223344-1122334455667788-01'*/ SELECT process_order(123);",
+	  "Plan": {
+	    "Node Type": "Result",
+	    "Startup Cost": 0.00,
+	    "Total Cost": 0.26,
+	    "Actual Startup Time": 0.015,
+	    "Actual Total Time": 5.123,
+	    "Actual Rows": 1,
+	    "Actual Loops": 1
+	  }
+	}
+2025-12-18 10:15:01.128 UTC [1001] LOG:  duration: 4.891 ms  plan:
+	{
+	  "Query Text": "SELECT * FROM orders WHERE order_id = $1",
+	  "Plan": {
+	    "Node Type": "Index Scan",
+	    "Relation Name": "orders",
+	    "Index Name": "orders_pkey",
+	    "Startup Cost": 0.42,
+	    "Total Cost": 8.44,
+	    "Actual Startup Time": 0.023,
+	    "Actual Total Time": 4.567,
+	    "Actual Rows": 1,
+	    "Actual Loops": 1
+	  }
+	}

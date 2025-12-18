@@ -129,6 +129,111 @@ configs:
       ANALYZE users;
       ANALYZE orders;
 
+      -- Create functions for testing nested calls
+      -- Level 3: Get order details
+      CREATE OR REPLACE FUNCTION get_order_details(p_order_id INTEGER)
+      RETURNS TABLE(order_id INTEGER, user_name VARCHAR, total DECIMAL) AS $$func$$
+      BEGIN
+          RETURN QUERY
+          SELECT o.id, u.name, o.total
+          FROM orders o
+          JOIN users u ON o.user_id = u.id
+          WHERE o.id = p_order_id;
+      END;
+      $$func$$ LANGUAGE plpgsql;
+
+      -- Level 2: Calculate user order statistics
+      CREATE OR REPLACE FUNCTION get_user_order_stats(p_user_id INTEGER)
+      RETURNS TABLE(total_orders BIGINT, total_spent DECIMAL, avg_order DECIMAL) AS $$$$func$$$$
+      BEGIN
+          RETURN QUERY
+          SELECT
+              COUNT(*)::BIGINT,
+              SUM(total),
+              AVG(total)
+          FROM orders
+          WHERE user_id = p_user_id
+            AND status = 'completed';
+      END;
+      $$$$func$$$$ LANGUAGE plpgsql;
+
+      -- Level 1: Process order (calls other functions)
+      CREATE OR REPLACE FUNCTION process_order(p_order_id INTEGER)
+      RETURNS TABLE(
+          order_info TEXT,
+          user_stats TEXT
+      ) AS $$$$func$$$$
+      DECLARE
+          v_user_id INTEGER;
+          v_order_details RECORD;
+          v_user_stats RECORD;
+      BEGIN
+          -- Get order details (triggers auto_explain)
+          SELECT * INTO v_order_details
+          FROM get_order_details(p_order_id);
+
+          -- Get user ID from the order
+          SELECT user_id INTO v_user_id
+          FROM orders
+          WHERE id = p_order_id;
+
+          -- Get user statistics (triggers auto_explain)
+          SELECT * INTO v_user_stats
+          FROM get_user_order_stats(v_user_id);
+
+          -- Return formatted results
+          RETURN QUERY SELECT
+              format('Order %s: %s - $%s',
+                     v_order_details.order_id,
+                     v_order_details.user_name,
+                     v_order_details.total)::TEXT,
+              format('User stats: %s orders, $%s total, $%s avg',
+                     v_user_stats.total_orders,
+                     v_user_stats.total_spent,
+                     v_user_stats.avg_order)::TEXT;
+      END;
+      $$$$func$$$$ LANGUAGE plpgsql;
+
+      -- Create a test query script with traceparent
+      -- This will be in /tmp/test_function_calls.sql inside the container
+      CREATE TEMP TABLE test_queries AS
+      SELECT 1 as query_num,
+             '/*traceparent=''00-' || md5(random()::text) || md5(random()::text) || '-' ||
+              substring(md5(random()::text), 1, 16) || '-01''*/ SELECT * FROM process_order(1);' as query
+      UNION ALL
+      SELECT 2,
+             '/*traceparent=''00-' || md5(random()::text) || md5(random()::text) || '-' ||
+              substring(md5(random()::text), 1, 16) || '-01''*/ SELECT * FROM process_order(100);'
+      UNION ALL
+      SELECT 3,
+             '/*traceparent=''00-aabbccdd11223344aabbccdd11223344-1122334455667788-01''*/ SELECT * FROM process_order(500);';
+
+      -- Output instructions
+      DO $$$$block$$$$
+      BEGIN
+          RAISE NOTICE '';
+          RAISE NOTICE '=================================================================';
+          RAISE NOTICE 'Test functions created! To test nested function call tracing:';
+          RAISE NOTICE '';
+          RAISE NOTICE 'Example 1: With explicit traceparent';
+          RAISE NOTICE '  /*traceparent=''00-aabbccdd11223344aabbccdd11223344-1122334455667788-01''*/';
+          RAISE NOTICE '  SELECT * FROM process_order(500);';
+          RAISE NOTICE '';
+          RAISE NOTICE 'Example 2: Simple call (generates random trace ID)';
+          RAISE NOTICE '  SELECT * FROM process_order(1);';
+          RAISE NOTICE '';
+          RAISE NOTICE 'This will trigger multiple auto_explain entries:';
+          RAISE NOTICE '  1. Main query calling process_order()';
+          RAISE NOTICE '  2. Query inside get_order_details()';
+          RAISE NOTICE '  3. Query selecting user_id';
+          RAISE NOTICE '  4. Query inside get_user_order_stats()';
+          RAISE NOTICE '';
+          RAISE NOTICE 'All queries from the same session (PID) will share the trace ID!';
+          RAISE NOTICE 'View traces at http://localhost:16686';
+          RAISE NOTICE '=================================================================';
+          RAISE NOTICE '';
+      END $$$$block$$$$;
+
   otel_pgplan_config:
     content: |
       receivers:
