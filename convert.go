@@ -498,20 +498,26 @@ func (c *Converter) emitExecutionSpan(spans ptrace.SpanSlice, traceID pcommon.Tr
 func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, execBase, execEnd pcommon.Timestamp, node PlanNode) {
 	spanID := c.idGenerator.NewSpanID()
 
-	// Wall-clock: use reported offsets from execution start (startup/total). Duration uses raw Actual Total Time.
-	// InitPlans execute at the start of the execution phase, not offset by their startup time.
-	isInitPlan := node.ParentRelationship != nil && *node.ParentRelationship == "InitPlan"
-	nodeStart := execBase
-	if !isInitPlan && node.ActualStartupTime != nil {
-		nodeStart = addMS(execBase, *node.ActualStartupTime)
+	nodeStart, nodeEnd := planNodeTimes(node, execBase, execEnd)
+
+	// Ensure the parent span envelopes its children by looking at predicted child bounds.
+	var childMaxEnd pcommon.Timestamp
+	var childMinStart pcommon.Timestamp
+	for i, child := range node.Plans {
+		cs, ce := planNodeTimes(child, execBase, execEnd)
+		if ce > childMaxEnd {
+			childMaxEnd = ce
+		}
+		if i == 0 || (cs != 0 && cs < childMinStart) {
+			childMinStart = cs
+		}
 	}
-	// Duration: raw actual total time (no loop scaling) to reflect wall-clock.
-	nodeDur := firstNonNil(node.ActualTotalTime, nil, 0)
-	selfDur := exclusiveFromActuals(node)
-	if selfDur <= 0 {
-		selfDur = nodeDur
+	if childMaxEnd > nodeEnd {
+		nodeEnd = childMaxEnd
 	}
-	nodeEnd := addMS(nodeStart, selfDur)
+	if childMinStart != 0 && childMinStart < nodeStart {
+		nodeStart = childMinStart
+	}
 	if nodeEnd < nodeStart {
 		nodeEnd = nodeStart
 	}
@@ -790,6 +796,22 @@ func addMS(ts pcommon.Timestamp, ms float64) pcommon.Timestamp {
 	// Convert ms to ns
 	ns := int64(ms * 1e6)
 	return pcommon.Timestamp(uint64(int64(ts) + ns))
+}
+
+func planNodeTimes(node PlanNode, execBase, execEnd pcommon.Timestamp) (pcommon.Timestamp, pcommon.Timestamp) {
+	startOffset := firstNonNil(node.ActualStartupTime, nil, 0)
+	total := firstNonNil(node.ActualTotalTime, &node.DerivedTotalTime, 0)
+
+	start := addMS(execBase, startOffset)
+	end := addMS(execBase, total)
+
+	if end < start {
+		end = start
+	}
+	if execEnd != 0 && end > execEnd {
+		end = execEnd
+	}
+	return start, end
 }
 
 func firstNonNil(primary *float64, secondary *float64, fallback float64) float64 {

@@ -1,6 +1,7 @@
-2025-12-18 12:42:49.654 UTC [322] LOG:  duration: 0.091 ms  plan:
+2025-12-19 09:09:37.138 UTC [19942] LOG:  duration: 0.022 ms  plan:
 	{
-	  "Query Text": "SELECT o.id, u.name, o.total\n    FROM orders o\n    JOIN users u ON o.user_id = u.id\n    WHERE o.id = p_order_id",
+	  "Query Text": "\n    SELECT o.id, u.name, o.total\n    FROM orders o\n    JOIN users u ON o.user_id = u.id\n    WHERE o.id = p_order_id;\n",
+	  "Query Parameters": "$1 = '123'",
 	  "Plan": {
 	    "Node Type": "Nested Loop",
 	    "Parallel Aware": false,
@@ -9,9 +10,9 @@
 	    "Startup Cost": 0.56,
 	    "Total Cost": 16.61,
 	    "Plan Rows": 1,
-	    "Plan Width": 18,
-	    "Actual Startup Time": 0.085,
-	    "Actual Total Time": 0.087,
+	    "Plan Width": 68,
+	    "Actual Startup Time": 0.019,
+	    "Actual Total Time": 0.020,
 	    "Actual Rows": 1,
 	    "Actual Loops": 1,
 	    "Inner Unique": true,
@@ -39,11 +40,11 @@
 	        "Total Cost": 8.30,
 	        "Plan Rows": 1,
 	        "Plan Width": 14,
-	        "Actual Startup Time": 0.042,
-	        "Actual Total Time": 0.044,
+	        "Actual Startup Time": 0.010,
+	        "Actual Total Time": 0.010,
 	        "Actual Rows": 1,
 	        "Actual Loops": 1,
-	        "Index Cond": "(id = 10)",
+	        "Index Cond": "(id = $1)",
 	        "Rows Removed by Index Recheck": 0,
 	        "Shared Hit Blocks": 3,
 	        "Shared Read Blocks": 0,
@@ -69,8 +70,8 @@
 	        "Total Cost": 8.29,
 	        "Plan Rows": 1,
 	        "Plan Width": 12,
-	        "Actual Startup Time": 0.028,
-	        "Actual Total Time": 0.028,
+	        "Actual Startup Time": 0.007,
+	        "Actual Total Time": 0.007,
 	        "Actual Rows": 1,
 	        "Actual Loops": 1,
 	        "Index Cond": "(id = o.user_id)",
@@ -89,14 +90,10 @@
 	    ]
 	  }
 	}
-2025-12-18 12:42:49.654 UTC [322] CONTEXT:  SQL statement "SELECT o.id, u.name, o.total
-	    FROM orders o
-	    JOIN users u ON o.user_id = u.id
-	    WHERE o.id = p_order_id"
-	PL/pgSQL function get_order_details(integer) line 3 at RETURN QUERY
+2025-12-19 09:09:37.138 UTC [19942] CONTEXT:  SQL function "get_order_details" statement 1
 	SQL statement "SELECT *                          FROM get_order_details(p_order_id)"
 	PL/pgSQL function process_order(integer) line 8 at SQL statement
-2025-12-18 12:42:49.654 UTC [322] LOG:  duration: 1.895 ms  plan:
+2025-12-19 09:09:37.139 UTC [19942] LOG:  duration: 1.698 ms  plan:
 	{
 	  "Query Text": "SELECT *                          FROM get_order_details(p_order_id)",
 	  "Plan": {
@@ -109,11 +106,11 @@
 	    "Total Cost": 10.25,
 	    "Plan Rows": 1000,
 	    "Plan Width": 68,
-	    "Actual Startup Time": 1.883,
-	    "Actual Total Time": 1.883,
+	    "Actual Startup Time": 1.689,
+	    "Actual Total Time": 1.689,
 	    "Actual Rows": 1,
 	    "Actual Loops": 1,
-	    "Shared Hit Blocks": 18,
+	    "Shared Hit Blocks": 394,
 	    "Shared Read Blocks": 0,
 	    "Shared Dirtied Blocks": 0,
 	    "Shared Written Blocks": 0,
@@ -125,9 +122,9 @@
 	    "Temp Written Blocks": 0
 	  }
 	}
-2025-12-18 12:42:49.654 UTC [322] CONTEXT:  SQL statement "SELECT *                          FROM get_order_details(p_order_id)"
+2025-12-19 09:09:37.139 UTC [19942] CONTEXT:  SQL statement "SELECT *                          FROM get_order_details(p_order_id)"
 	PL/pgSQL function process_order(integer) line 8 at SQL statement
-2025-12-18 12:42:49.654 UTC [322] LOG:  duration: 0.018 ms  plan:
+2025-12-19 09:09:37.139 UTC [19942] LOG:  duration: 0.006 ms  plan:
 	{
 	  "Query Text": "SELECT user_id                    FROM orders\n    WHERE id = p_order_id",
 	  "Plan": {
@@ -142,11 +139,11 @@
 	    "Total Cost": 8.30,
 	    "Plan Rows": 1,
 	    "Plan Width": 4,
-	    "Actual Startup Time": 0.017,
-	    "Actual Total Time": 0.017,
+	    "Actual Startup Time": 0.005,
+	    "Actual Total Time": 0.006,
 	    "Actual Rows": 1,
 	    "Actual Loops": 1,
-	    "Index Cond": "(id = 10)",
+	    "Index Cond": "(id = 123)",
 	    "Rows Removed by Index Recheck": 0,
 	    "Shared Hit Blocks": 3,
 	    "Shared Read Blocks": 0,
@@ -160,27 +157,28 @@
 	    "Temp Written Blocks": 0
 	  }
 	}
-2025-12-18 12:42:49.654 UTC [322] CONTEXT:  SQL statement "SELECT user_id                    FROM orders
+2025-12-19 09:09:37.139 UTC [19942] CONTEXT:  SQL statement "SELECT user_id                    FROM orders
 	    WHERE id = p_order_id"
 	PL/pgSQL function process_order(integer) line 12 at SQL statement
-2025-12-18 12:42:49.655 UTC [322] LOG:  duration: 0.129 ms  plan:
+2025-12-19 09:09:37.140 UTC [19942] LOG:  duration: 0.054 ms  plan:
 	{
-	  "Query Text": "SELECT\n        COUNT(*)::BIGINT,\n        SUM(total),\n        AVG(total)\n    FROM orders\n    WHERE user_id = p_user_id\n      AND status = 'completed'",
+	  "Query Text": "\n    SELECT\n        COUNT(*)::BIGINT,\n        SUM(total),\n        AVG(total)\n    FROM orders\n    WHERE user_id = p_user_id\n      AND status = 'completed';\n",
+	  "Query Parameters": "$1 = '766'",
 	  "Plan": {
 	    "Node Type": "Aggregate",
 	    "Strategy": "Plain",
 	    "Partial Mode": "Simple",
 	    "Parallel Aware": false,
 	    "Async Capable": false,
-	    "Startup Cost": 19.17,
-	    "Total Cost": 19.18,
+	    "Startup Cost": 19.18,
+	    "Total Cost": 19.19,
 	    "Plan Rows": 1,
 	    "Plan Width": 72,
-	    "Actual Startup Time": 0.127,
-	    "Actual Total Time": 0.128,
+	    "Actual Startup Time": 0.052,
+	    "Actual Total Time": 0.052,
 	    "Actual Rows": 1,
 	    "Actual Loops": 1,
-	    "Shared Hit Blocks": 8,
+	    "Shared Hit Blocks": 11,
 	    "Shared Read Blocks": 0,
 	    "Shared Dirtied Blocks": 0,
 	    "Shared Written Blocks": 0,
@@ -200,19 +198,19 @@
 	        "Alias": "orders",
 	        "Startup Cost": 4.32,
 	        "Total Cost": 19.16,
-	        "Plan Rows": 2,
+	        "Plan Rows": 3,
 	        "Plan Width": 6,
-	        "Actual Startup Time": 0.042,
-	        "Actual Total Time": 0.070,
+	        "Actual Startup Time": 0.032,
+	        "Actual Total Time": 0.044,
 	        "Actual Rows": 3,
 	        "Actual Loops": 1,
-	        "Recheck Cond": "(user_id = 729)",
+	        "Recheck Cond": "(user_id = $1)",
 	        "Rows Removed by Index Recheck": 0,
 	        "Filter": "((status)::text = 'completed'::text)",
-	        "Rows Removed by Filter": 3,
-	        "Exact Heap Blocks": 6,
+	        "Rows Removed by Filter": 7,
+	        "Exact Heap Blocks": 9,
 	        "Lossy Heap Blocks": 0,
-	        "Shared Hit Blocks": 8,
+	        "Shared Hit Blocks": 11,
 	        "Shared Read Blocks": 0,
 	        "Shared Dirtied Blocks": 0,
 	        "Shared Written Blocks": 0,
@@ -235,9 +233,9 @@
 	            "Plan Width": 0,
 	            "Actual Startup Time": 0.018,
 	            "Actual Total Time": 0.018,
-	            "Actual Rows": 6,
+	            "Actual Rows": 10,
 	            "Actual Loops": 1,
-	            "Index Cond": "(user_id = 729)",
+	            "Index Cond": "(user_id = $1)",
 	            "Shared Hit Blocks": 2,
 	            "Shared Read Blocks": 0,
 	            "Shared Dirtied Blocks": 0,
@@ -254,20 +252,103 @@
 	    ]
 	  }
 	}
-2025-12-18 12:42:49.655 UTC [322] CONTEXT:  SQL statement "SELECT
-	        COUNT(*)::BIGINT,
-	        SUM(total),
-	        AVG(total)
-	    FROM orders
-	    WHERE user_id = p_user_id
-	      AND status = 'completed'"
-	PL/pgSQL function get_user_order_stats(integer) line 3 at SQL statement
+2025-12-19 09:09:37.140 UTC [19942] CONTEXT:  SQL function "get_user_order_stats" statement 1
 	SQL statement "SELECT *                       FROM get_user_order_stats(v_user_id)"
 	PL/pgSQL function process_order(integer) line 17 at SQL statement
-2025-12-18 12:42:49.655 UTC [322] ERROR:  query has no destination for result data
-2025-12-18 12:42:49.655 UTC [322] HINT:  If you want to discard the results of a SELECT, use PERFORM instead.
-2025-12-18 12:42:49.655 UTC [322] CONTEXT:  PL/pgSQL function get_user_order_stats(integer) line 3 at SQL statement
-	SQL statement "SELECT *                       FROM get_user_order_stats(v_user_id)"
+2025-12-19 09:09:37.141 UTC [19942] LOG:  duration: 1.970 ms  plan:
+	{
+	  "Query Text": "SELECT *                       FROM get_user_order_stats(v_user_id)",
+	  "Plan": {
+	    "Node Type": "Function Scan",
+	    "Parallel Aware": false,
+	    "Async Capable": false,
+	    "Function Name": "get_user_order_stats",
+	    "Alias": "get_user_order_stats",
+	    "Startup Cost": 0.25,
+	    "Total Cost": 10.25,
+	    "Plan Rows": 1000,
+	    "Plan Width": 72,
+	    "Actual Startup Time": 1.968,
+	    "Actual Total Time": 1.968,
+	    "Actual Rows": 1,
+	    "Actual Loops": 1,
+	    "Shared Hit Blocks": 278,
+	    "Shared Read Blocks": 0,
+	    "Shared Dirtied Blocks": 0,
+	    "Shared Written Blocks": 0,
+	    "Local Hit Blocks": 0,
+	    "Local Read Blocks": 0,
+	    "Local Dirtied Blocks": 0,
+	    "Local Written Blocks": 0,
+	    "Temp Read Blocks": 0,
+	    "Temp Written Blocks": 0
+	  }
+	}
+2025-12-19 09:09:37.141 UTC [19942] CONTEXT:  SQL statement "SELECT *                       FROM get_user_order_stats(v_user_id)"
 	PL/pgSQL function process_order(integer) line 17 at SQL statement
-2025-12-18 12:42:49.655 UTC [322] STATEMENT:  select * from process_order(10)
-	;
+2025-12-19 09:09:37.141 UTC [19942] LOG:  duration: 0.008 ms  plan:
+	{
+	  "Query Text": "SELECT\n        format('Order %s: %s - $%s',\n               v_order_details.order_id,\n               v_order_details.user_name,\n               v_order_details.total)::TEXT,\n        format('User stats: %s orders, $%s total, $%s avg',\n               v_user_stats.total_orders,\n               v_user_stats.total_spent,\n               v_user_stats.avg_order)::TEXT",
+	  "Plan": {
+	    "Node Type": "Result",
+	    "Parallel Aware": false,
+	    "Async Capable": false,
+	    "Startup Cost": 0.00,
+	    "Total Cost": 0.01,
+	    "Plan Rows": 1,
+	    "Plan Width": 64,
+	    "Actual Startup Time": 0.006,
+	    "Actual Total Time": 0.006,
+	    "Actual Rows": 1,
+	    "Actual Loops": 1,
+	    "Shared Hit Blocks": 0,
+	    "Shared Read Blocks": 0,
+	    "Shared Dirtied Blocks": 0,
+	    "Shared Written Blocks": 0,
+	    "Local Hit Blocks": 0,
+	    "Local Read Blocks": 0,
+	    "Local Dirtied Blocks": 0,
+	    "Local Written Blocks": 0,
+	    "Temp Read Blocks": 0,
+	    "Temp Written Blocks": 0
+	  }
+	}
+2025-12-19 09:09:37.141 UTC [19942] CONTEXT:  SQL statement "SELECT
+	        format('Order %s: %s - $%s',
+	               v_order_details.order_id,
+	               v_order_details.user_name,
+	               v_order_details.total)::TEXT,
+	        format('User stats: %s orders, $%s total, $%s avg',
+	               v_user_stats.total_orders,
+	               v_user_stats.total_spent,
+	               v_user_stats.avg_order)::TEXT"
+	PL/pgSQL function process_order(integer) line 21 at RETURN QUERY
+2025-12-19 09:09:37.141 UTC [19942] LOG:  duration: 4.652 ms  plan:
+	{
+	  "Query Text": "SELECT * FROM process_order(123);",
+	  "Plan": {
+	    "Node Type": "Function Scan",
+	    "Parallel Aware": false,
+	    "Async Capable": false,
+	    "Function Name": "process_order",
+	    "Alias": "process_order",
+	    "Startup Cost": 0.25,
+	    "Total Cost": 10.25,
+	    "Plan Rows": 1000,
+	    "Plan Width": 64,
+	    "Actual Startup Time": 4.647,
+	    "Actual Total Time": 4.647,
+	    "Actual Rows": 1,
+	    "Actual Loops": 1,
+	    "Shared Hit Blocks": 717,
+	    "Shared Read Blocks": 0,
+	    "Shared Dirtied Blocks": 0,
+	    "Shared Written Blocks": 0,
+	    "Local Hit Blocks": 0,
+	    "Local Read Blocks": 0,
+	    "Local Dirtied Blocks": 0,
+	    "Local Written Blocks": 0,
+	    "Temp Read Blocks": 0,
+	    "Temp Written Blocks": 0
+	  }
+	}
