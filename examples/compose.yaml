@@ -133,19 +133,15 @@ configs:
       -- Level 3: Get order details
       CREATE OR REPLACE FUNCTION get_order_details(p_order_id INTEGER)
       RETURNS TABLE(order_id INTEGER, user_name VARCHAR, total DECIMAL) AS $$func$$
-      BEGIN
-          RETURN QUERY
           SELECT o.id, u.name, o.total
           FROM orders o
           JOIN users u ON o.user_id = u.id
           WHERE o.id = p_order_id;
-      END;
-      $$func$$ LANGUAGE plpgsql;
+      $$func$$ LANGUAGE sql;
 
       -- Level 2: Calculate user order statistics
       CREATE OR REPLACE FUNCTION get_user_order_stats(p_user_id INTEGER)
       RETURNS TABLE(total_orders BIGINT, total_spent DECIMAL, avg_order DECIMAL) AS $$func$$
-      BEGIN
           SELECT
               COUNT(*)::BIGINT,
               SUM(total),
@@ -153,8 +149,7 @@ configs:
           FROM orders
           WHERE user_id = p_user_id
             AND status = 'completed';
-      END;
-      $$func$$ LANGUAGE plpgsql;
+      $$func$$ LANGUAGE sql;
 
       -- Level 1: Process order (calls other functions)
       CREATE OR REPLACE FUNCTION process_order(p_order_id INTEGER)
