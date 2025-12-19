@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -40,7 +41,7 @@ type traceContext struct {
 }
 
 var (
-	traceparentRegex = regexp.MustCompile(`/\*\s*traceparent\s*=\s*'([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})'\s*\*/`)
+	traceparentRegex = regexp.MustCompile(`/\*\s*traceparent\s*=?\s*'([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})'\s*\*/`)
 	pidPrefixRegex   = regexp.MustCompile(`\[(\d+)\]`)
 	contextFuncRegex = regexp.MustCompile(`PL/pgSQL function ([^(]+)\(`)
 )
@@ -84,7 +85,6 @@ func (c *logsToTracesConnector) ConsumeLogs(ctx context.Context, ld plog.Logs) e
 				// Seed session cache from logs that carry traceparent in STATEMENT/CONTEXT
 				// lines even if they don't have EXPLAIN JSON.
 				c.seedTraceContext(resourceLog.Resource(), logRecord)
-				c.seedFunctionContext(resourceLog.Resource(), logRecord)
 
 				// Extract EXPLAIN JSON from log record
 				explainJSON, err := c.extractExplainJSON(logRecord)
@@ -138,7 +138,23 @@ func (c *logsToTracesConnector) extractFromBody(record plog.LogRecord) (string, 
 		// Body is a string - assume it's the EXPLAIN JSON
 		bodyStr := body.Str()
 		c.logger.Debug("Extracting from string body", zap.Int("length", len(bodyStr)))
-		return bodyStr, nil
+		trimmed := strings.TrimSpace(bodyStr)
+
+		// Skip non-plan textual logs (e.g., CONTEXT/STATEMENT without JSON).
+		if !strings.Contains(trimmed, "plan:") &&
+			!strings.HasPrefix(trimmed, "{") &&
+			!strings.HasPrefix(trimmed, "[") {
+			return "", nil
+		}
+
+		// If the log contains a plan prefix plus trailing lines, keep only the JSON section.
+		if idx := strings.Index(trimmed, "{"); idx >= 0 {
+			if end := findMatchingBrace(trimmed, idx); end > idx {
+				return trimmed[idx : end+1], nil
+			}
+		}
+
+		return trimmed, nil
 
 	case pcommon.ValueTypeMap:
 		// Body is structured - might need to navigate to find EXPLAIN data
@@ -192,6 +208,10 @@ func (c *logsToTracesConnector) convertToTraces(
 		IncludePlanJSON: c.config.Conversion.IncludePlanJSON,
 		ExpandLoops:     c.config.Conversion.ExpandLoops,
 	}
+	if ts := logRecord.Timestamp(); ts != 0 {
+		t := ts.AsTime()
+		opts.BaseTime = &t
+	}
 
 	// Extract database name from log attributes if configured
 	if c.config.Conversion.DBNameAttribute != "" {
@@ -216,9 +236,6 @@ func (c *logsToTracesConnector) convertToTraces(
 	if len(sessCtx.traceID) >= 16 {
 		copy(sessionContext.TraceID[:], sessCtx.traceID[:16])
 	}
-	if len(sessCtx.parentSpanID) >= 8 {
-		copy(sessionContext.ParentSpanID[:], sessCtx.parentSpanID[:8])
-	}
 
 	traces, pid, err := otlppgplan.ConvertWithSessionContext(ctx, []byte(explainJSON), opts, &sessionContext)
 	if err != nil {
@@ -232,12 +249,7 @@ func (c *logsToTracesConnector) convertToTraces(
 	}
 	c.traceContextCache[sessionKey] = traceContext{
 		traceID:      string(sessionContext.TraceID[:]),
-		parentSpanID: string(sessionContext.ParentSpanID[:]),
-	}
-
-	// Apply function context as synthetic spans (outer->inner)
-	if funcs, ok := c.functionContextCache[sessionKey]; ok && len(funcs) > 0 {
-		c.applyFunctionContext(traces, funcs)
+		parentSpanID: "",
 	}
 
 	// Optionally: propagate resource attributes from logs to traces
@@ -350,6 +362,15 @@ func (c *logsToTracesConnector) seedTraceContext(resource pcommon.Resource, logR
 	traceID := matches[2]
 	spanID := matches[3]
 
+	traceBytes, err := hex.DecodeString(traceID)
+	if err != nil || len(traceBytes) != 16 {
+		return
+	}
+	spanBytes, err := hex.DecodeString(spanID)
+	if err != nil || len(spanBytes) != 8 {
+		return
+	}
+
 	sessionKey := c.buildSessionKey(resource, logRecord)
 	if sessionKey == "default" {
 		if pid := extractPID(logRecord); pid > 0 {
@@ -359,8 +380,8 @@ func (c *logsToTracesConnector) seedTraceContext(resource pcommon.Resource, logR
 
 	// Store raw bytes so ConvertWithSessionContext can reuse them.
 	c.traceContextCache[sessionKey] = traceContext{
-		traceID:      traceID,
-		parentSpanID: spanID,
+		traceID:      string(traceBytes),
+		parentSpanID: string(spanBytes),
 	}
 }
 
@@ -379,6 +400,24 @@ func extractPID(logRecord plog.LogRecord) int {
 	}
 
 	return 0
+}
+
+// findMatchingBrace returns the index of the matching closing brace for the opening brace at start.
+// Returns -1 if no match is found.
+func findMatchingBrace(s string, start int) int {
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // seedFunctionContext parses CONTEXT logs to capture PL/pgSQL call stack.

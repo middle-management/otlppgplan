@@ -226,7 +226,9 @@ func ConvertWithSessionContext(ctx context.Context, explainJSON []byte, opts Con
 
 	if sessionCtx != nil {
 		copy(sessionCtx.TraceID[:], converter.traceID[:])
-		copy(sessionCtx.ParentSpanID[:], converter.rootSpanID[:])
+		// Do not carry over parent span IDs between statements; keep trace ID only.
+		var zeroParent [8]byte
+		copy(sessionCtx.ParentSpanID[:], zeroParent[:])
 	}
 
 	return traces, pid, err
@@ -236,7 +238,7 @@ func ConvertWithSessionContext(ctx context.Context, explainJSON []byte, opts Con
 var pgLogPrefixPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+ \[(\d+)\] LOG:\s+)?duration:\s+([\d.]+)\s+ms\s+plan:\s*`)
 
 // Traceparent pattern in SQL comments: /*traceparent='00-trace_id-span_id-flags'*/
-var traceparentPattern = regexp.MustCompile(`/\*\s*traceparent\s*=\s*'([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})'\s*\*/`)
+var traceparentPattern = regexp.MustCompile(`/\*\s*traceparent\s*=?\s*'([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})'\s*\*/`)
 
 // parseAutoExplainLog parses a PostgreSQL auto_explain log entry
 // Format: "2025-12-18 08:20:34.162 UTC [3476] LOG:  duration: 2.166 ms  plan:\n\t{...json...}"
