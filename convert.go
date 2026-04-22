@@ -103,7 +103,9 @@ type PlanNode struct {
 	Plans []PlanNode `json:"Plans,omitempty"`
 
 	// Parallel worker details (if present)
-	Workers []PlanWorker `json:"Workers,omitempty"`
+	Workers         []PlanWorker `json:"Workers,omitempty"`
+	WorkersPlanned  *int         `json:"Workers Planned,omitempty"`
+	WorkersLaunched *int         `json:"Workers Launched,omitempty"`
 
 	// Derived fields (not from JSON)
 	DerivedTotalTime float64 `json:"-"`
@@ -633,7 +635,10 @@ func (c *Converter) emitLoopIterations(spans ptrace.SpanSlice, traceID pcommon.T
 // processPlanDerived computes derived totals with loop scaling, CTE de-duplication, and child boosting.
 func processPlanDerived(root *PlanNode) {
 	// Pass 1: compute base derived totals with loop scaling.
-	computeDerivedTotals(root)
+	// Start with 1 participant (serial). Gather/Gather Merge nodes increase
+	// the participant count for their subtree so parallel loops aren't
+	// over-multiplied.
+	computeDerivedTotals(root, 1)
 
 	// Pass 2: collect CTE init/scan nodes.
 	cteInits := make(map[string]*PlanNode)
@@ -645,15 +650,38 @@ func processPlanDerived(root *PlanNode) {
 	applyChildBoost(root)
 }
 
-func computeDerivedTotals(n *PlanNode) {
-	for i := range n.Plans {
-		computeDerivedTotals(&n.Plans[i])
+// computeDerivedTotals computes each node's wall-clock duration in ms.
+//
+// For serial nodes this is ActualTotalTime × ActualLoops (the node runs
+// once per loop, sequentially). Under a Gather / Gather Merge, PostgreSQL
+// reports Actual Loops as the SUM across parallel participants (the leader
+// plus launched workers) while Actual Total Time is the PER-WORKER
+// average — multiplying the two would count the same wall-clock time once
+// per worker. We divide loops by the number of participants so the result
+// stays a per-worker duration, which is also the real wall-clock time
+// since participants run concurrently.
+func computeDerivedTotals(n *PlanNode, participants float64) {
+	childParticipants := participants
+	if n.NodeType == "Gather" || n.NodeType == "Gather Merge" {
+		p := 1.0 // leader always participates in accounting
+		if n.WorkersLaunched != nil && *n.WorkersLaunched > 0 {
+			p += float64(*n.WorkersLaunched)
+		} else if n.WorkersPlanned != nil && *n.WorkersPlanned > 0 {
+			p += float64(*n.WorkersPlanned)
+		}
+		childParticipants = p
 	}
 
-	n.DerivedTotalTime = firstNonNil(n.ActualTotalTime, nil, 0)
-	if n.ActualLoops != nil && *n.ActualLoops > 1 {
-		n.DerivedTotalTime = n.DerivedTotalTime * *n.ActualLoops
+	for i := range n.Plans {
+		computeDerivedTotals(&n.Plans[i], childParticipants)
 	}
+
+	total := firstNonNil(n.ActualTotalTime, nil, 0)
+	loops := firstNonNil(n.ActualLoops, nil, 1)
+	if participants > 1 {
+		loops = loops / participants
+	}
+	n.DerivedTotalTime = total * loops
 }
 
 func collectCTENodes(n *PlanNode, inits map[string]*PlanNode, scans map[string][]*PlanNode) {
