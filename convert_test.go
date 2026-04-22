@@ -163,24 +163,21 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 }
 
 type DeterministicIDGenerator struct {
-	traceCounter int
-	spanCounter  uint64
+	i int
 }
 
 func (d *DeterministicIDGenerator) NewTraceID() pcommon.TraceID {
-	d.traceCounter++
+	d.i++
 	var tid [16]byte
-	binary.LittleEndian.PutUint64(tid[:8], uint64(d.traceCounter))
-	binary.LittleEndian.PutUint64(tid[8:], uint64(d.traceCounter))
+	binary.LittleEndian.PutUint64(tid[:8], uint64(d.i))
+	binary.LittleEndian.PutUint64(tid[8:], uint64(d.i))
 	return pcommon.TraceID(tid)
 }
 
-// NewSpanID returns a unique span ID per call so snapshots can verify
-// parent-child relationships.
+// deterministicSpanID generates a span ID from a counter for testing
 func (d *DeterministicIDGenerator) NewSpanID() pcommon.SpanID {
-	d.spanCounter++
 	var sid [8]byte
-	binary.LittleEndian.PutUint64(sid[:], d.spanCounter)
+	binary.LittleEndian.PutUint64(sid[:], uint64(d.i))
 	return pcommon.SpanID(sid)
 }
 

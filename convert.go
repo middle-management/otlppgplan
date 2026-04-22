@@ -399,17 +399,11 @@ func (c *Converter) convertFromRoot(ctx context.Context, root ExplainRoot, planJ
 	// Preprocess plan for derived timings (loops, CTE de-dup, child boost).
 	processPlanDerived(&root.Plan)
 
-	// Root query span covers planning (if present) then execution. Compute the
-	// execution window first so the root's end exactly matches the execution
-	// span's end (avoids sub-nanosecond drift from chained float->int rounding).
+	// Root query span duration includes planning (if present) plus execution.
 	planningMS := firstNonNil(root.PlanningTime, nil, 0)
 	executionMS := firstNonNil(root.ExecutionTime, root.Plan.ActualTotalTime, 0)
-	execStart := start
-	if planningMS > 0 {
-		execStart = addMS(start, planningMS)
-	}
-	execEnd := addMS(execStart, executionMS)
-	end := execEnd
+	rootDurMS := planningMS + executionMS
+	end := addMS(start, rootDurMS)
 
 	q := spans.AppendEmpty()
 	q.SetTraceID(traceID)
@@ -451,15 +445,18 @@ func (c *Converter) convertFromRoot(ctx context.Context, root ExplainRoot, planJ
 		attrs.PutStr("db.postgresql.plan_json", string(planJSON))
 	}
 
+	execStart := start
 	if planningMS > 0 {
+		execStart = addMS(start, planningMS)
 		c.emitPlanningSpan(spans, traceID, rootSpanID, start, planningMS)
 	}
 	execSpanID := rootSpanID
 	if executionMS > 0 {
-		execSpanID = c.emitExecutionSpan(spans, traceID, rootSpanID, execStart, execEnd)
+		execSpanID = c.emitExecutionSpan(spans, traceID, rootSpanID, execStart, executionMS)
 	}
+	execEnd := addMS(execStart, executionMS)
 
-	// Emit plan-node spans recursively, nesting each child inside its parent.
+	// Emit plan-node spans recursively.
 	c.emitPlanNodeSpans(spans, traceID, execSpanID, execStart, execEnd, root.Plan)
 
 	return tr, nil
@@ -480,7 +477,7 @@ func (c *Converter) emitPlanningSpan(spans ptrace.SpanSlice, traceID pcommon.Tra
 	a.PutDouble("db.postgresql.planning_time_ms", durMS)
 }
 
-func (c *Converter) emitExecutionSpan(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, start, end pcommon.Timestamp) pcommon.SpanID {
+func (c *Converter) emitExecutionSpan(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, start pcommon.Timestamp, durMS float64) pcommon.SpanID {
 	s := spans.AppendEmpty()
 	spanID := c.idGenerator.NewSpanID()
 	s.SetTraceID(traceID)
@@ -489,19 +486,41 @@ func (c *Converter) emitExecutionSpan(spans ptrace.SpanSlice, traceID pcommon.Tr
 	s.SetName("DB EXECUTION")
 	s.SetKind(ptrace.SpanKindInternal)
 	s.SetStartTimestamp(start)
-	s.SetEndTimestamp(end)
+	s.SetEndTimestamp(addMS(start, durMS))
 
 	a := s.Attributes()
 	a.PutStr("db.system", "postgresql")
-	a.PutDouble("db.postgresql.execution_time_ms", float64(end-start)/1e6)
+	a.PutDouble("db.postgresql.execution_time_ms", durMS)
 
 	return spanID
 }
 
-func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, parentStart, parentEnd pcommon.Timestamp, node PlanNode) {
+func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, execBase, execEnd pcommon.Timestamp, node PlanNode) {
 	spanID := c.idGenerator.NewSpanID()
 
-	nodeStart, nodeEnd := planNodeTimes(node, parentStart, parentEnd)
+	nodeStart, nodeEnd := planNodeTimes(node, execBase, execEnd)
+
+	// Ensure the parent span envelopes its children by looking at predicted child bounds.
+	var childMaxEnd pcommon.Timestamp
+	var childMinStart pcommon.Timestamp
+	for i, child := range node.Plans {
+		cs, ce := planNodeTimes(child, execBase, execEnd)
+		if ce > childMaxEnd {
+			childMaxEnd = ce
+		}
+		if i == 0 || (cs != 0 && cs < childMinStart) {
+			childMinStart = cs
+		}
+	}
+	if childMaxEnd > nodeEnd {
+		nodeEnd = childMaxEnd
+	}
+	if childMinStart != 0 && childMinStart < nodeStart {
+		nodeStart = childMinStart
+	}
+	if nodeEnd < nodeStart {
+		nodeEnd = nodeStart
+	}
 
 	s := spans.AppendEmpty()
 	s.SetTraceID(traceID)
@@ -568,9 +587,9 @@ func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.Tr
 		a.PutDouble("db.postgresql.exclusive_time_ms", excl)
 	}
 
-	// Recurse: each child is placed inside this node's time window.
+	// Recurse
 	for _, child := range node.Plans {
-		c.emitPlanNodeSpans(spans, traceID, spanID, nodeStart, nodeEnd, child)
+		c.emitPlanNodeSpans(spans, traceID, spanID, execBase, execEnd, child)
 	}
 
 	// Synthetic loop iteration spans (optional)
@@ -779,25 +798,18 @@ func addMS(ts pcommon.Timestamp, ms float64) pcommon.Timestamp {
 	return pcommon.Timestamp(uint64(int64(ts) + ns))
 }
 
-// planNodeTimes places a plan node's span inside its parent's time window.
-// Duration is the node's loop-scaled DerivedTotalTime (falling back to raw
-// ActualTotalTime when the derived value is absent). The node starts at the
-// parent's start and is clamped to end no later than the parent's end, so
-// every span is nested within its parent by construction.
-func planNodeTimes(node PlanNode, parentStart, parentEnd pcommon.Timestamp) (pcommon.Timestamp, pcommon.Timestamp) {
-	dur := node.DerivedTotalTime
-	if dur <= 0 {
-		dur = firstNonNil(node.ActualTotalTime, nil, 0)
-	}
+func planNodeTimes(node PlanNode, execBase, execEnd pcommon.Timestamp) (pcommon.Timestamp, pcommon.Timestamp) {
+	startOffset := firstNonNil(node.ActualStartupTime, nil, 0)
+	total := firstNonNil(node.ActualTotalTime, &node.DerivedTotalTime, 0)
 
-	start := parentStart
-	end := addMS(start, dur)
+	start := addMS(execBase, startOffset)
+	end := addMS(execBase, total)
 
-	if parentEnd != 0 && end > parentEnd {
-		end = parentEnd
-	}
 	if end < start {
 		end = start
+	}
+	if execEnd != 0 && end > execEnd {
+		end = execEnd
 	}
 	return start, end
 }
