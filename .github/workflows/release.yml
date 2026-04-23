@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: |
+          ext=""; if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          name="otlppgplan-${GOOS}-${GOARCH}${ext}"
+          mkdir -p dist
+          cd cmd/otlppgplan && go build -ldflags="-s -w -X main.version=${TAG}" -o "../../dist/${name}" .
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ github.event.release.tag_name }}
+
+      - name: Upload asset
+        run: gh release upload "$TAG" dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
