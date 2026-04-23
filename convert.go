@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -760,7 +761,7 @@ func exclusiveFromActuals(node PlanNode) float64 {
 	if excl < 0 {
 		return 0
 	}
-	return excl
+	return math.Round(excl*1e6) / 1e6
 }
 
 // -----------------------------
