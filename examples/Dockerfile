@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
@@ -8,7 +8,7 @@ COPY . .
 # Build the custom collector
 WORKDIR /build/examples
 RUN apk add --no-cache git && \
-    go run go.opentelemetry.io/collector/cmd/builder@latest --config builder-config.yaml
+    go run go.opentelemetry.io/collector/cmd/builder@v0.150.0 --config builder-config.yaml
 
 FROM alpine:latest
 
