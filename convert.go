@@ -461,8 +461,13 @@ func (c *Converter) convertFromRoot(ctx context.Context, root ExplainRoot, planJ
 		execSpanID = c.emitExecutionSpan(spans, traceID, rootSpanID, execStart, execEnd)
 	}
 
-	// Emit plan-node spans recursively, nesting each child inside its parent.
-	c.emitPlanNodeSpans(spans, traceID, execSpanID, execStart, execEnd, root.Plan)
+	// Emit plan-node spans in a waterfall layout. Each node is positioned
+	// at [execStart + ActualStartupTime, execStart + DerivedTotalTime].
+	// PG's monotonicity (parent.startup >= child.startup, parent.total >=
+	// child.total) means children start before parents and end before
+	// parents — the classic plan-visualizer waterfall — rather than
+	// strictly nesting inside their parent's window.
+	c.emitPlanNodeSpans(spans, traceID, execSpanID, execStart, root.Plan)
 
 	return tr, nil
 }
@@ -500,10 +505,10 @@ func (c *Converter) emitExecutionSpan(spans ptrace.SpanSlice, traceID pcommon.Tr
 	return spanID
 }
 
-func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, parentStart, parentEnd pcommon.Timestamp, node PlanNode) {
+func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, execBase pcommon.Timestamp, node PlanNode) {
 	spanID := c.idGenerator.NewSpanID()
 
-	nodeStart, nodeEnd := planNodeTimes(node, parentStart, parentEnd)
+	nodeStart, nodeEnd := planNodeTimes(node, execBase)
 
 	s := spans.AppendEmpty()
 	s.SetTraceID(traceID)
@@ -570,9 +575,13 @@ func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.Tr
 		a.PutDouble("db.postgresql.exclusive_time_ms", excl)
 	}
 
-	// Recurse: each child is placed inside this node's time window.
+	// Recurse. Every plan node is positioned relative to execBase using its
+	// own Actual Startup Time / Actual Total Time, so pass execBase through
+	// unchanged. Children will often start before their parent starts —
+	// that's the point of a waterfall layout (a child emits its first row
+	// before the parent, which is waiting on it).
 	for _, child := range node.Plans {
-		c.emitPlanNodeSpans(spans, traceID, spanID, nodeStart, nodeEnd, child)
+		c.emitPlanNodeSpans(spans, traceID, spanID, execBase, child)
 	}
 
 	// Synthetic loop iteration spans (optional)
@@ -807,23 +816,29 @@ func addMS(ts pcommon.Timestamp, ms float64) pcommon.Timestamp {
 	return pcommon.Timestamp(uint64(int64(ts) + ns))
 }
 
-// planNodeTimes places a plan node's span inside its parent's time window.
-// Duration is the node's loop-scaled DerivedTotalTime (falling back to raw
-// ActualTotalTime when the derived value is absent). The node starts at the
-// parent's start and is clamped to end no later than the parent's end, so
-// every span is nested within its parent by construction.
-func planNodeTimes(node PlanNode, parentStart, parentEnd pcommon.Timestamp) (pcommon.Timestamp, pcommon.Timestamp) {
-	dur := node.DerivedTotalTime
-	if dur <= 0 {
-		dur = firstNonNil(node.ActualTotalTime, nil, 0)
+// planNodeTimes places a plan node's span on a waterfall timeline rooted at
+// execBase (the start of the query's execution phase). The span runs from
+// when this node emitted its first row to when it emitted its last row —
+// directly from PostgreSQL's Actual Startup Time and Actual Total Time.
+//
+// PG's rule that a parent's startup/total are at least as high as any
+// child's means children emit first and finish first, so in this layout a
+// child span typically starts *before* its parent's span. That is the
+// expected waterfall shape: siblings stagger by their own startup times
+// and the leaves are the earliest, shortest bars on the left.
+//
+// DerivedTotalTime is used instead of raw ActualTotalTime so multi-loop
+// nodes get their full wall-clock duration (and parallel subtrees are
+// divided by participants, handled upstream in computeDerivedTotals).
+func planNodeTimes(node PlanNode, execBase pcommon.Timestamp) (pcommon.Timestamp, pcommon.Timestamp) {
+	startupMS := firstNonNil(node.ActualStartupTime, nil, 0)
+	totalMS := node.DerivedTotalTime
+	if totalMS <= 0 {
+		totalMS = firstNonNil(node.ActualTotalTime, nil, 0)
 	}
 
-	start := parentStart
-	end := addMS(start, dur)
-
-	if parentEnd != 0 && end > parentEnd {
-		end = parentEnd
-	}
+	start := addMS(execBase, startupMS)
+	end := addMS(execBase, totalMS)
 	if end < start {
 		end = start
 	}
