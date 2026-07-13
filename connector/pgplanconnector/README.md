@@ -29,6 +29,7 @@ connectors:
       service_name: postgresql
       include_plan_json: false
       expand_loops: false
+      layout: waterfall       # "waterfall" or "flame"
     on_error: drop            # "drop" or "log"
 ```
 
@@ -55,6 +56,7 @@ connectors:
 | `conversion.db_name_attribute` | string | - | Log attribute containing database name |
 | `conversion.include_plan_json` | bool | `false` | Include raw plan JSON in trace attributes |
 | `conversion.expand_loops` | bool | `false` | Create separate spans for loop iterations |
+| `conversion.layout` | string | `"waterfall"` | Plan-node span timeline: `"waterfall"` places nodes at their actual startup/total times; `"flame"` packs children end-to-end inside their parent (pg_flame-style) |
 | `on_error` | string | `"drop"` | Error handling: `"drop"` (silent) or `"log"` (log errors) |
 
 ## Usage

@@ -204,6 +204,9 @@ type ConvertOptions struct {
     // ExpandLoops creates separate spans for each loop iteration (when Actual Loops > 1)
     ExpandLoops bool
     
+    // Layout selects the plan-node span timeline: LayoutWaterfall (default) or LayoutFlame
+    Layout SpanLayout
+    
     // IDGenerator for custom trace/span ID generation (default: random)
     IDGenerator IDGenerator
     
@@ -366,6 +369,23 @@ DerivedTime = ActualTime × ActualLoops
 **Pass 3: Child Boost**
 - Ensure parent time >= sum of children times
 - Maintains timeline consistency
+
+### Span Layouts
+
+Two timeline layouts are available via `ConvertOptions.Layout`:
+
+- **`LayoutWaterfall`** (default) — each plan node's span runs from its first
+  emitted row to its last: `[execStart + Actual Startup Time, execStart +
+  DerivedTotalTime]`. Children typically start *before* their parents (a child
+  emits rows before the parent that consumes them), so spans stagger rather
+  than nest. Answers "when did rows flow". Note that blocking nodes (Hash,
+  Sort) render as near-zero-width spans since they emit their first row only
+  when finished.
+- **`LayoutFlame`** — pg_flame-style: each node's span width is its inclusive
+  `DerivedTotalTime`, children are packed end-to-end inside their parent's
+  window, and every span nests strictly within its parent. The parent's
+  overhang past its last child is its exclusive time. Answers "where did the
+  time go".
 
 ### Span Hierarchy Example
 

@@ -3,6 +3,7 @@ package pgplanconnector
 import (
 	"fmt"
 
+	"github.com/middle-management/otlppgplan"
 	"go.opentelemetry.io/collector/component"
 )
 
@@ -42,6 +43,11 @@ type ConversionConfig struct {
 
 	// ExpandLoops determines whether to expand loop iterations into separate spans
 	ExpandLoops bool `mapstructure:"expand_loops"`
+
+	// Layout selects the plan-node span timeline: "waterfall" (default)
+	// places nodes at their actual startup/total times, "flame" packs
+	// children end-to-end inside their parent, pg_flame-style
+	Layout string `mapstructure:"layout"`
 }
 
 // createDefaultConfig creates the default configuration
@@ -71,6 +77,13 @@ func (c *Config) Validate() error {
 
 	if c.OnError != "drop" && c.OnError != "log" {
 		return fmt.Errorf("on_error must be 'drop' or 'log', got '%s'", c.OnError)
+	}
+
+	switch c.Conversion.Layout {
+	case "", string(otlppgplan.LayoutWaterfall), string(otlppgplan.LayoutFlame):
+	default:
+		return fmt.Errorf("conversion.layout must be '%s' or '%s', got '%s'",
+			otlppgplan.LayoutWaterfall, otlppgplan.LayoutFlame, c.Conversion.Layout)
 	}
 
 	return nil

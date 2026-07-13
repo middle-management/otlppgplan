@@ -124,18 +124,38 @@ type PlanWorker struct {
 // Converter
 // -----------------------------
 
+// SpanLayout selects how plan-node spans are placed on the trace timeline.
+type SpanLayout string
+
+const (
+	// LayoutWaterfall places each node at
+	// [execStart + Actual Startup Time, execStart + DerivedTotalTime]:
+	// the span runs from the node's first emitted row to its last. PG's
+	// monotonicity means children typically start before their parents,
+	// so spans stagger rather than nest. Answers "when did rows flow".
+	LayoutWaterfall SpanLayout = "waterfall"
+
+	// LayoutFlame renders pg_flame-style: each node's span duration is its
+	// DerivedTotalTime (inclusive time), children are packed end-to-end
+	// inside their parent's window, and every span nests strictly within
+	// its parent. The parent's overhang past its last child is its
+	// exclusive time. Answers "where did the time go".
+	LayoutFlame SpanLayout = "flame"
+)
+
 type ConvertOptions struct {
 	// Resource attributes
 	ServiceName string // service.name
 	DBName      string // db.name
 
 	// Span attributes
-	Statement       string // db.statement (optional; consider redaction)
-	Operation       string // db.operation (SELECT/INSERT/...)
-	PeerAddress     string // server.address (optional)
-	PeerPort        int    // server.port (optional)
-	IncludePlanJSON bool   // attach raw plan JSON string to root span (can be huge)
-	ExpandLoops     bool   // emit synthetic child spans for loop iterations (uses derived totals)
+	Statement       string     // db.statement (optional; consider redaction)
+	Operation       string     // db.operation (SELECT/INSERT/...)
+	PeerAddress     string     // server.address (optional)
+	PeerPort        int        // server.port (optional)
+	IncludePlanJSON bool       // attach raw plan JSON string to root span (can be huge)
+	ExpandLoops     bool       // emit synthetic child spans for loop iterations (uses derived totals)
+	Layout          SpanLayout // timeline layout for plan-node spans (default: LayoutWaterfall)
 
 	// Timestamp control for testing
 	BaseTime *time.Time // optional base time for deterministic timestamps (defaults to time.Now() if nil)
@@ -462,8 +482,13 @@ func (c *Converter) convertFromRoot(ctx context.Context, root ExplainRoot, planJ
 		execSpanID = c.emitExecutionSpan(spans, traceID, rootSpanID, execStart, execEnd)
 	}
 
-	// Emit plan-node spans recursively, nesting each child inside its parent.
-	c.emitPlanNodeSpans(spans, traceID, execSpanID, execStart, execEnd, root.Plan)
+	// Emit plan-node spans. LayoutWaterfall positions each node at
+	// [execStart + ActualStartupTime, execStart + DerivedTotalTime] — PG's
+	// monotonicity (parent.startup >= child.startup, parent.total >=
+	// child.total) means children start before parents rather than nesting.
+	// LayoutFlame packs children end-to-end inside their parent's window,
+	// pg_flame-style, so spans nest strictly and width means inclusive time.
+	c.emitPlanNodeSpans(spans, traceID, execSpanID, execStart, execStart, execEnd, root.Plan)
 
 	return tr, nil
 }
@@ -501,10 +526,18 @@ func (c *Converter) emitExecutionSpan(spans ptrace.SpanSlice, traceID pcommon.Tr
 	return spanID
 }
 
-func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, parentStart, parentEnd pcommon.Timestamp, node PlanNode) {
+// emitPlanNodeSpans emits the span for node and recurses into its children.
+// execBase anchors the waterfall layout; packStart/packEnd bound this node's
+// slot in the flame layout (unused by waterfall).
+func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.TraceID, parentSpanID pcommon.SpanID, execBase, packStart, packEnd pcommon.Timestamp, node PlanNode) {
 	spanID := c.idGenerator.NewSpanID()
 
-	nodeStart, nodeEnd := planNodeTimes(node, parentStart, parentEnd)
+	var nodeStart, nodeEnd pcommon.Timestamp
+	if c.opts.Layout == LayoutFlame {
+		nodeStart, nodeEnd = flameNodeTimes(node, packStart, packEnd)
+	} else {
+		nodeStart, nodeEnd = planNodeTimes(node, execBase)
+	}
 
 	s := spans.AppendEmpty()
 	s.SetTraceID(traceID)
@@ -571,9 +604,19 @@ func (c *Converter) emitPlanNodeSpans(spans ptrace.SpanSlice, traceID pcommon.Tr
 		a.PutDouble("db.postgresql.exclusive_time_ms", excl)
 	}
 
-	// Recurse: each child is placed inside this node's time window.
+	// Recurse. In the waterfall layout every node is positioned relative to
+	// execBase using its own Actual Startup Time / Actual Total Time, so
+	// children often start before their parent — a child emits its first
+	// row before the parent, which is waiting on it. In the flame layout
+	// each child gets the slot after its previous sibling, inside this
+	// node's window.
+	cursor := nodeStart
 	for _, child := range node.Plans {
-		c.emitPlanNodeSpans(spans, traceID, spanID, nodeStart, nodeEnd, child)
+		c.emitPlanNodeSpans(spans, traceID, spanID, execBase, cursor, nodeEnd, child)
+		cursor = addMS(cursor, nodeDurationMS(child))
+		if cursor > nodeEnd {
+			cursor = nodeEnd
+		}
 	}
 
 	// Synthetic loop iteration spans (optional)
@@ -808,27 +851,57 @@ func addMS(ts pcommon.Timestamp, ms float64) pcommon.Timestamp {
 	return pcommon.Timestamp(uint64(int64(ts) + ns))
 }
 
-// planNodeTimes places a plan node's span inside its parent's time window.
-// Duration is the node's loop-scaled DerivedTotalTime (falling back to raw
-// ActualTotalTime when the derived value is absent). The node starts at the
-// parent's start and is clamped to end no later than the parent's end, so
-// every span is nested within its parent by construction.
-func planNodeTimes(node PlanNode, parentStart, parentEnd pcommon.Timestamp) (pcommon.Timestamp, pcommon.Timestamp) {
-	dur := node.DerivedTotalTime
-	if dur <= 0 {
-		dur = firstNonNil(node.ActualTotalTime, nil, 0)
+// planNodeTimes places a plan node's span on a waterfall timeline rooted at
+// execBase (the start of the query's execution phase). The span runs from
+// when this node emitted its first row to when it emitted its last row —
+// directly from PostgreSQL's Actual Startup Time and Actual Total Time.
+//
+// PG's rule that a parent's startup/total are at least as high as any
+// child's means children emit first and finish first, so in this layout a
+// child span typically starts *before* its parent's span. That is the
+// expected waterfall shape: siblings stagger by their own startup times
+// and the leaves are the earliest, shortest bars on the left.
+//
+// DerivedTotalTime is used instead of raw ActualTotalTime so multi-loop
+// nodes get their full wall-clock duration (and parallel subtrees are
+// divided by participants, handled upstream in computeDerivedTotals).
+func planNodeTimes(node PlanNode, execBase pcommon.Timestamp) (pcommon.Timestamp, pcommon.Timestamp) {
+	startupMS := firstNonNil(node.ActualStartupTime, nil, 0)
+
+	start := addMS(execBase, startupMS)
+	end := addMS(execBase, nodeDurationMS(node))
+	if end < start {
+		end = start
 	}
+	return start, end
+}
 
-	start := parentStart
-	end := addMS(start, dur)
-
-	if parentEnd != 0 && end > parentEnd {
-		end = parentEnd
+// flameNodeTimes places a plan node pg_flame-style: the span occupies
+// [packStart, packStart + DerivedTotalTime], clamped to its parent's end so
+// spans nest strictly. Siblings are packed end-to-end by the caller, so bar
+// width means inclusive time and the parent's overhang past its last child
+// is its exclusive time. Blocking nodes (Hash, Sort) keep their full width
+// here, unlike the waterfall where startup ≈ total collapses them.
+func flameNodeTimes(node PlanNode, packStart, packEnd pcommon.Timestamp) (pcommon.Timestamp, pcommon.Timestamp) {
+	start := packStart
+	end := addMS(start, nodeDurationMS(node))
+	if packEnd != 0 && end > packEnd {
+		end = packEnd
 	}
 	if end < start {
 		end = start
 	}
 	return start, end
+}
+
+// nodeDurationMS is the span duration for a plan node: the loop-scaled
+// DerivedTotalTime, falling back to raw ActualTotalTime when no derived
+// value was computed.
+func nodeDurationMS(node PlanNode) float64 {
+	if node.DerivedTotalTime > 0 {
+		return node.DerivedTotalTime
+	}
+	return firstNonNil(node.ActualTotalTime, nil, 0)
 }
 
 func firstNonNil(primary *float64, secondary *float64, fallback float64) float64 {

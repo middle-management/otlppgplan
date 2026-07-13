@@ -49,6 +49,11 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 
 	logStartRe := regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+ \[\d+\] LOG:`)
 
+	// Every example is snapshotted once per layout: the default waterfall
+	// keeps the existing "<name>.snap.json" files, other layouts get
+	// "<name>.<layout>.snap.json".
+	layouts := []SpanLayout{LayoutWaterfall, LayoutFlame}
+
 	for _, file := range files {
 		ext := filepath.Ext(file.Name())
 		if ext != ".json" && ext != ".txt" {
@@ -56,109 +61,118 @@ func TestConvertExplainJSONFiles(t *testing.T) {
 		}
 
 		filePath := filepath.Join(examplesDir, file.Name())
-		t.Run(file.Name(), func(t *testing.T) {
-			// Read the JSON file
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				t.Fatalf("failed to read test file %s: %v", file.Name(), err)
-			}
-
-			// Convert to traces with deterministic options
-			ctx := context.Background()
-			opts := ConvertOptions{
-				DBName:          "testdb",
-				Statement:       "SELECT * FROM test",
-				Operation:       "SELECT",
-				PeerAddress:     "localhost",
-				PeerPort:        5432,
-				IncludePlanJSON: false,
-				BaseTime:        &fixedBaseTime,
-				IDGenerator:     &DeterministicIDGenerator{},
-			}
-
-			sessionCtx := &SessionTraceContext{}
-			traces := ptrace.NewTraces()
-
-			switch ext {
-			case ".json":
-				converted, _, err := ConvertWithSessionContext(ctx, content, opts, sessionCtx)
+		for _, layout := range layouts {
+			layout := layout
+			t.Run(file.Name()+"/"+string(layout), func(t *testing.T) {
+				// Read the JSON file
+				content, err := os.ReadFile(filePath)
 				if err != nil {
-					t.Fatalf("failed to convert JSON to traces for %s: %v", file.Name(), err)
+					t.Fatalf("failed to read test file %s: %v", file.Name(), err)
 				}
-				converted.ResourceSpans().MoveAndAppendTo(traces.ResourceSpans())
-			case ".txt":
-				entries := splitLogsByPrefix(string(content), logStartRe)
-				if len(entries) == 0 {
-					t.Fatalf("no log entries found in %s", file.Name())
+
+				// Convert to traces with deterministic options
+				ctx := context.Background()
+				opts := ConvertOptions{
+					DBName:          "testdb",
+					Statement:       "SELECT * FROM test",
+					Operation:       "SELECT",
+					PeerAddress:     "localhost",
+					PeerPort:        5432,
+					IncludePlanJSON: false,
+					Layout:          layout,
+					BaseTime:        &fixedBaseTime,
+					IDGenerator:     &DeterministicIDGenerator{},
 				}
-				for i, entry := range entries {
-					trimmed := truncateToPlanSection(entry)
-					if trimmed == "" {
-						continue
-					}
-					converted, _, err := ConvertWithSessionContext(ctx, []byte(trimmed), opts, sessionCtx)
+
+				sessionCtx := &SessionTraceContext{}
+				traces := ptrace.NewTraces()
+
+				switch ext {
+				case ".json":
+					converted, _, err := ConvertWithSessionContext(ctx, content, opts, sessionCtx)
 					if err != nil {
-						t.Fatalf("failed to convert log entry %d in %s: %v", i, file.Name(), err)
+						t.Fatalf("failed to convert JSON to traces for %s: %v", file.Name(), err)
 					}
 					converted.ResourceSpans().MoveAndAppendTo(traces.ResourceSpans())
-				}
-			}
-
-			// Verify basic trace structure
-			if traces.ResourceSpans().Len() == 0 {
-				t.Fatal("should have resource spans")
-			}
-			if traces.ResourceSpans().At(0).ScopeSpans().Len() == 0 {
-				t.Fatal("should have scope spans")
-			}
-			if traces.ResourceSpans().At(0).ScopeSpans().At(0).Spans().Len() == 0 {
-				t.Fatal("should have spans")
-			}
-
-			// Marshal to JSON for snapshot comparison
-			m := &ptrace.JSONMarshaler{}
-			jsonBytes, err := m.MarshalTraces(traces)
-			if err != nil {
-				t.Fatalf("failed to marshal traces to JSON: %v", err)
-			}
-
-			// Generate snapshot file name
-			snapshotName := strings.TrimSuffix(file.Name(), ".json") + ".snap.json"
-			snapshotPath := filepath.Join(snapshotDir, snapshotName)
-
-			// Check if snapshot file exists
-			if _, err := os.Stat(snapshotPath); err == nil {
-				// Snapshot exists, compare with it
-				expectedContent, err := os.ReadFile(snapshotPath)
-				if err != nil {
-					t.Fatalf("failed to read snapshot file %s: %v", snapshotName, err)
-				}
-
-				// Compare the JSON output
-				if string(jsonBytes) != string(expectedContent) {
-					// Update the snapshot if SNAPSHOT_UPDATE environment variable is set
-					if os.Getenv("SNAPSHOT_UPDATE") == "1" {
-						err := os.WriteFile(snapshotPath, jsonBytes, 0644)
-						if err != nil {
-							t.Fatalf("failed to update snapshot file %s: %v", snapshotName, err)
+				case ".txt":
+					entries := splitLogsByPrefix(string(content), logStartRe)
+					if len(entries) == 0 {
+						t.Fatalf("no log entries found in %s", file.Name())
+					}
+					for i, entry := range entries {
+						trimmed := truncateToPlanSection(entry)
+						if trimmed == "" {
+							continue
 						}
-						t.Logf("Updated snapshot file: %s", snapshotName)
-					} else {
-						// Show the difference
-						t.Errorf("Snapshot mismatch for %s\n", file.Name())
-						t.Errorf("Expected snapshot file: %s\n", snapshotPath)
-						t.Errorf("To update snapshots, run: SNAPSHOT_UPDATE=1 go test -v\n")
+						converted, _, err := ConvertWithSessionContext(ctx, []byte(trimmed), opts, sessionCtx)
+						if err != nil {
+							t.Fatalf("failed to convert log entry %d in %s: %v", i, file.Name(), err)
+						}
+						converted.ResourceSpans().MoveAndAppendTo(traces.ResourceSpans())
 					}
 				}
-			} else {
-				// No snapshot exists, create one
-				err := os.WriteFile(snapshotPath, jsonBytes, 0644)
-				if err != nil {
-					t.Fatalf("failed to create snapshot file %s: %v", snapshotName, err)
+
+				// Verify basic trace structure
+				if traces.ResourceSpans().Len() == 0 {
+					t.Fatal("should have resource spans")
 				}
-				t.Logf("Created new snapshot file: %s", snapshotName)
-			}
-		})
+				if traces.ResourceSpans().At(0).ScopeSpans().Len() == 0 {
+					t.Fatal("should have scope spans")
+				}
+				if traces.ResourceSpans().At(0).ScopeSpans().At(0).Spans().Len() == 0 {
+					t.Fatal("should have spans")
+				}
+
+				// Marshal to JSON for snapshot comparison
+				m := &ptrace.JSONMarshaler{}
+				jsonBytes, err := m.MarshalTraces(traces)
+				if err != nil {
+					t.Fatalf("failed to marshal traces to JSON: %v", err)
+				}
+
+				// Generate snapshot file name; the default waterfall layout
+				// keeps the historical un-suffixed name.
+				suffix := ".snap.json"
+				if layout != LayoutWaterfall {
+					suffix = "." + string(layout) + ".snap.json"
+				}
+				snapshotName := strings.TrimSuffix(file.Name(), ".json") + suffix
+				snapshotPath := filepath.Join(snapshotDir, snapshotName)
+
+				// Check if snapshot file exists
+				if _, err := os.Stat(snapshotPath); err == nil {
+					// Snapshot exists, compare with it
+					expectedContent, err := os.ReadFile(snapshotPath)
+					if err != nil {
+						t.Fatalf("failed to read snapshot file %s: %v", snapshotName, err)
+					}
+
+					// Compare the JSON output
+					if string(jsonBytes) != string(expectedContent) {
+						// Update the snapshot if SNAPSHOT_UPDATE environment variable is set
+						if os.Getenv("SNAPSHOT_UPDATE") == "1" {
+							err := os.WriteFile(snapshotPath, jsonBytes, 0644)
+							if err != nil {
+								t.Fatalf("failed to update snapshot file %s: %v", snapshotName, err)
+							}
+							t.Logf("Updated snapshot file: %s", snapshotName)
+						} else {
+							// Show the difference
+							t.Errorf("Snapshot mismatch for %s\n", file.Name())
+							t.Errorf("Expected snapshot file: %s\n", snapshotPath)
+							t.Errorf("To update snapshots, run: SNAPSHOT_UPDATE=1 go test -v\n")
+						}
+					}
+				} else {
+					// No snapshot exists, create one
+					err := os.WriteFile(snapshotPath, jsonBytes, 0644)
+					if err != nil {
+						t.Fatalf("failed to create snapshot file %s: %v", snapshotName, err)
+					}
+					t.Logf("Created new snapshot file: %s", snapshotName)
+				}
+			})
+		}
 	}
 }
 
