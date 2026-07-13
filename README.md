@@ -45,6 +45,21 @@ This starts PostgreSQL with auto_explain, collectors, and Jaeger. View traces at
 
 See [examples/DOCKER.md](examples/DOCKER.md) for details.
 
+### Browser Playground (no Docker)
+
+Explore plans as interactive flame graphs entirely in your browser, using
+[PGlite](https://pglite.dev) (Postgres-in-WASM) with auto_explain:
+
+```bash
+cd playground
+python3 -m http.server 8000
+```
+
+Open http://localhost:8000, run SQL against a pre-seeded schema, and every
+captured plan renders as a flame graph using the same span derivation as this
+library. Traces can be downloaded as OTLP/JSON. See
+[playground/README.md](playground/README.md).
+
 ## Supported Input Formats
 
 The library automatically detects and handles multiple input formats:

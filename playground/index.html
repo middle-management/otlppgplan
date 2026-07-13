@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>otlppgplan playground — PGlite auto_explain flame graphs</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='2' width='14' height='3' rx='1' fill='%232a78d6'/%3E%3Crect x='2' y='6' width='9' height='3' rx='1' fill='%231baf7a'/%3E%3Crect x='3' y='10' width='5' height='3' rx='1' fill='%23eda100'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>otlppgplan playground</h1>
+    <p class="subtitle">
+      Runs SQL in <a href="https://pglite.dev">PGlite</a> (Postgres compiled to WASM, entirely in your browser)
+      with <code>auto_explain</code> enabled. Every captured plan is converted to spans — the same derivation
+      the otlppgplan Go library uses for OTLP traces — and rendered as a flame graph.
+    </p>
+    <div class="status" id="status">Loading PGlite…</div>
+  </header>
+
+  <div class="toolbar">
+    <select id="examples" title="Insert an example query">
+      <option value="">Examples…</option>
+    </select>
+    <label>Layout
+      <select id="layout" title="Flame: children packed inside parents, width = inclusive time. Waterfall: bars placed at actual startup time.">
+        <option value="flame">Flame</option>
+        <option value="waterfall">Waterfall</option>
+      </select>
+    </label>
+    <span class="spacer"></span>
+    <button id="reset" title="Drop everything and re-seed the demo schema">Reset database</button>
+    <button id="run" class="primary" title="Ctrl+Enter / Cmd+Enter">Run</button>
+  </div>
+
+  <textarea id="editor" spellcheck="false" aria-label="SQL editor"></textarea>
+
+  <details class="paste-plan">
+    <summary>…or paste EXPLAIN / auto_explain output instead of running a query</summary>
+    <textarea id="paste-input" spellcheck="false"
+      placeholder='Paste EXPLAIN (ANALYZE, FORMAT JSON) output, an auto_explain JSON log entry, or a full log line ("2025-… LOG:  duration: 2.166 ms  plan: {…}")'></textarea>
+    <button id="paste-render" type="button">Render plan</button>
+  </details>
+
+  <div id="output"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
