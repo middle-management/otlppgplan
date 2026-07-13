@@ -1,5 +1,6 @@
 import { initGoConverter, convertToOTLP } from './goconvert.js'
 import { isAutoExplainMessage, otlpToRenderTree } from './spans.js'
+import { splitStatements } from './split.js'
 import { createFlameGraph, fmtDur, fmtNum, escapeHTML } from './flame.js'
 
 const PGLITE_VERSION = '0.5.4'
@@ -146,6 +147,7 @@ let db = null
 let PGliteMod = null
 let runCounter = 0
 const planCards = [] // { rebuild }
+window.__planCards = planCards // introspection hook for browser tests
 
 function setStatus(text, kind = '') {
   ui.status.textContent = text
@@ -350,21 +352,30 @@ async function runSQL() {
   group.innerHTML = `<div class="run-title">Run #${runCounter} · ${new Date().toLocaleTimeString()}</div>`
   ui.output.prepend(group)
 
-  const notices = []
+  // Run statements one at a time: auto_explain's "Query Text" is the entire
+  // source text of an exec() call, so batching a script would stamp every
+  // captured plan with the whole script instead of its own statement.
+  const statements = splitStatements(sql)
   const baseTimeMS = Date.now()
-  try {
-    const results = await db.exec(sql, { onNotice: (n) => notices.push(n) })
-    handleNotices(group, notices, baseTimeMS)
-    addResults(group, results)
-    if (group.children.length === 1) {
-      const note = document.createElement('div')
-      note.className = 'messages'
-      note.textContent = 'Statements executed; no plans were captured (auto_explain only logs plannable statements).'
-      group.appendChild(note)
+  for (let s = 0; s < statements.length; s++) {
+    const stmt = statements[s]
+    const notices = []
+    try {
+      const results = await db.exec(stmt, { onNotice: (n) => notices.push(n) })
+      handleNotices(group, notices, baseTimeMS)
+      addResults(group, results)
+    } catch (err) {
+      handleNotices(group, notices, baseTimeMS)
+      const remaining = statements.length - s - 1
+      addErrorCard(group, `${String(err?.message ?? err)}\n\nin statement:\n${stmt}${remaining > 0 ? `\n\n(${remaining} following statement${remaining === 1 ? '' : 's'} not run)` : ''}`)
+      break
     }
-  } catch (err) {
-    handleNotices(group, notices, baseTimeMS)
-    addErrorCard(group, String(err?.message ?? err))
+  }
+  if (group.children.length === 1) {
+    const note = document.createElement('div')
+    note.className = 'messages'
+    note.textContent = 'Statements executed; no plans were captured (auto_explain only logs plannable statements).'
+    group.appendChild(note)
   }
   setBusy(false)
 }

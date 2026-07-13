@@ -49,6 +49,21 @@ spans for drawing; all plan semantics — loop scaling, parallel participant
 division, CTE de-duplication, child boost, flame/waterfall layouts — run in
 the Go code.
 
+Two practical details:
+
+- **Statements run one at a time** (`js/split.js` splits the editor script,
+  aware of comments, quoting, and `$$` dollar quoting). PostgreSQL reports
+  auto_explain's `Query Text` as the *entire* source text of a simple-protocol
+  query, so batching the script into one exec() would stamp every plan with
+  the whole script instead of its own statement.
+- **`coi-sw.js` makes the page cross-origin isolated.** Browsers coarsen
+  `performance.now()` to ~100µs on non-isolated pages, and that clock is what
+  PGlite's Postgres uses for EXPLAIN ANALYZE — fast plan nodes would all
+  measure 0.000 ms. The service worker injects COOP/COEP headers (which GitHub
+  Pages can't set), unlocking ~5µs resolution; it needs one page reload on
+  first visit. Without it (or in browsers without COEP `credentialless`) the
+  playground still works, just with coarser timings.
+
 ## Running locally
 
 Build the WASM converter once (produces `convert.wasm` + `wasm_exec.js`,
