@@ -1,0 +1,45 @@
+name: Deploy playground to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build Go converter to WASM
+        run: ./playground/build.sh
+
+      - name: Vendor PGlite
+        run: |
+          npm install --no-save @electric-sql/pglite@0.5.4
+          mkdir -p playground/vendor
+          cp -r node_modules/@electric-sql/pglite/dist playground/vendor/pglite
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: playground
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

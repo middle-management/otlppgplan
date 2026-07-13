@@ -1,6 +1,6 @@
-import { parseExplainText, isAutoExplainMessage, buildTrace, nodeCategory } from './convert.js'
+import { initGoConverter, convertToOTLP } from './goconvert.js'
+import { isAutoExplainMessage, otlpToRenderTree } from './spans.js'
 import { createFlameGraph, fmtDur, fmtNum, escapeHTML } from './flame.js'
-import { toOTLP } from './otlp.js'
 
 const PGLITE_VERSION = '0.5.4'
 const CDN_BASE = `https://cdn.jsdelivr.net/npm/@electric-sql/pglite@${PGLITE_VERSION}/dist`
@@ -145,7 +145,7 @@ const ui = {
 let db = null
 let PGliteMod = null
 let runCounter = 0
-const planCards = [] // { entry, baseTimeMS, container, flame, rebuild }
+const planCards = [] // { rebuild }
 
 function setStatus(text, kind = '') {
   ui.status.textContent = text
@@ -196,7 +196,7 @@ async function initDB() {
 
   const v = await db.query('SELECT version()')
   const version = String(v.rows[0]?.version ?? '').match(/^PostgreSQL \S+/)?.[0] ?? 'PostgreSQL'
-  setStatus(`Ready — ${version} via PGlite ${PGLITE_VERSION} (${PGliteMod.source}), auto_explain loaded. Demo schema: customers, orders, order_items.`, 'ready')
+  setStatus(`Ready — ${version} via PGlite ${PGLITE_VERSION} (${PGliteMod.source}), auto_explain loaded; converter: otlppgplan Go→WASM. Demo schema: customers, orders, order_items.`, 'ready')
   setBusy(false)
 }
 
@@ -204,8 +204,8 @@ async function initDB() {
 // Rendering
 // ---------------------------------------------------------------------------
 
-function download(filename, obj) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' })
+function downloadJSON(filename, jsonText) {
+  const blob = new Blob([jsonText], { type: 'application/json' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   a.download = filename
@@ -232,8 +232,16 @@ function renderDetails(panel, span) {
     ${rows}</tbody></table>`
 }
 
-// Renders one captured plan as a card with flame graph + details + export.
-function addPlanCard(parentEl, entry, { baseTimeMS }) {
+// Renders one captured plan as a card: the input text is converted by the Go
+// library (compiled to WASM) into OTLP/JSON, which is rendered as a flame
+// graph and downloadable verbatim.
+function addPlanCard(parentEl, inputText, { baseTimeMS }) {
+  const state = { inputText, baseTimeMS, otlp: null, tree: null, flame: null }
+
+  // Convert before creating any DOM so a bad input doesn't leave an empty card.
+  state.otlp = convertToOTLP(inputText, { layout: ui.layout.value, baseTimeMS })
+  state.tree = otlpToRenderTree(state.otlp)
+
   const card = document.createElement('div')
   card.className = 'card'
   parentEl.appendChild(card)
@@ -242,11 +250,11 @@ function addPlanCard(parentEl, entry, { baseTimeMS }) {
   const head = document.createElement('div')
   head.className = 'card-head'
   head.innerHTML = `
-    <div class="query">${escapeHTML(entry.queryText || '(no query text)')}</div>
-    <div class="dur">${fmtDur(entry.executionTime ?? entry.durationMS)}</div>
+    <div class="query">${escapeHTML(state.tree.queryText || '(no query text)')}</div>
+    <div class="dur">${fmtDur(state.tree.executionTimeMS)}</div>
     <div class="card-actions">
-      <button type="button" data-act="otlp" title="Download this trace as OTLP/JSON">OTLP JSON</button>
-      <button type="button" data-act="raw" title="Show the raw plan JSON">Plan JSON</button>
+      <button type="button" data-act="otlp" title="Download this trace exactly as the Go library marshals it (OTLP/JSON)">OTLP JSON</button>
+      <button type="button" data-act="raw" title="Show the raw auto_explain output">Plan JSON</button>
     </div>`
   card.appendChild(head)
 
@@ -265,20 +273,19 @@ function addPlanCard(parentEl, entry, { baseTimeMS }) {
   const rawHolder = document.createElement('div')
   rawHolder.className = 'raw-json'
   rawHolder.hidden = true
-  rawHolder.innerHTML = `<pre>${escapeHTML(JSON.stringify(JSON.parse(entry.raw), null, 2))}</pre>`
+  rawHolder.innerHTML = `<pre>${escapeHTML(inputText)}</pre>`
   card.appendChild(rawHolder)
-
-  const state = { entry, baseTimeMS, flame: null, trace: null }
 
   function rebuild() {
     state.flame?.destroy()
-    state.trace = buildTrace(entry, { layout: ui.layout.value })
-    legend.innerHTML = [...collectCategories(state.trace.root)]
+    state.otlp = convertToOTLP(inputText, { layout: ui.layout.value, baseTimeMS })
+    state.tree = otlpToRenderTree(state.otlp)
+    legend.innerHTML = [...collectCategories(state.tree.root)]
       .sort((a, b) => Object.keys(CATEGORY_LABELS).indexOf(a) - Object.keys(CATEGORY_LABELS).indexOf(b))
       .map((cat) => `<span class="chip"><span class="swatch" style="background:var(--cat-${cat})"></span>${CATEGORY_LABELS[cat]}</span>`)
       .join('')
     renderDetails(details, null)
-    state.flame = createFlameGraph(flameWrap, state.trace, {
+    state.flame = createFlameGraph(flameWrap, state.tree, {
       onSelect: (span) => renderDetails(details, span),
     })
   }
@@ -287,10 +294,7 @@ function addPlanCard(parentEl, entry, { baseTimeMS }) {
   planCards.push(state)
 
   head.querySelector('[data-act=otlp]').addEventListener('click', () => {
-    download(`trace-${idx}.json`, toOTLP(state.trace, {
-      baseTimeMS,
-      traceparent: entry.traceparent,
-    }))
+    downloadJSON(`trace-${idx}.json`, JSON.stringify(JSON.parse(state.otlp), null, 2))
   })
   head.querySelector('[data-act=raw]').addEventListener('click', () => {
     rawHolder.hidden = !rawHolder.hidden
@@ -371,9 +375,9 @@ function handleNotices(group, notices, baseTimeMS) {
     const text = n.message ?? ''
     if (isAutoExplainMessage(text)) {
       try {
-        addPlanCard(group, parseExplainText(text), { baseTimeMS })
+        addPlanCard(group, text, { baseTimeMS })
       } catch (err) {
-        addErrorCard(group, `Failed to parse auto_explain output: ${err.message}`)
+        addErrorCard(group, `Failed to convert auto_explain output: ${err.message}`)
       }
     } else if (text) {
       other.push(`${n.severity ?? 'NOTICE'}: ${text}`)
@@ -395,9 +399,9 @@ function renderPasted() {
   group.innerHTML = `<div class="run-title">Pasted plan · ${new Date().toLocaleTimeString()}</div>`
   ui.output.prepend(group)
   try {
-    addPlanCard(group, parseExplainText(text), { baseTimeMS: Date.now() })
+    addPlanCard(group, text, { baseTimeMS: Date.now() })
   } catch (err) {
-    addErrorCard(group, `Could not parse input: ${err.message}`)
+    addErrorCard(group, `Could not convert input: ${err.message}`)
   }
 }
 
@@ -442,7 +446,13 @@ ui.pasteRender.addEventListener('click', renderPasted)
 
 ui.editor.value = EXAMPLES[0].sql
 
-initDB().catch((err) => {
+async function init() {
+  setStatus('Loading otlppgplan converter (Go → WASM)…')
+  await initGoConverter()
+  await initDB()
+}
+
+init().catch((err) => {
   console.error(err)
-  setStatus(`Failed to start PGlite: ${err.message}. If you are offline, vendor PGlite locally — see playground/README.md.`, 'error')
+  setStatus(`Failed to start: ${err.message}. Run playground/build.sh to build convert.wasm; see playground/README.md.`, 'error')
 })

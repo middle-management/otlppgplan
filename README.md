@@ -47,18 +47,23 @@ See [examples/DOCKER.md](examples/DOCKER.md) for details.
 
 ### Browser Playground (no Docker)
 
-Explore plans as interactive flame graphs entirely in your browser, using
-[PGlite](https://pglite.dev) (Postgres-in-WASM) with auto_explain:
+Explore plans as interactive flame graphs entirely in your browser:
+**https://middle-management.github.io/otlppgplan/** (deployed from `main` via
+GitHub Pages).
+
+The playground runs SQL in [PGlite](https://pglite.dev) (Postgres-in-WASM)
+with auto_explain, converts every captured plan with this library compiled
+to WebAssembly (`cmd/wasm`), and renders the resulting OTLP spans as flame
+graphs. Traces download as OTLP/JSON exactly as the library marshals them.
+
+To run it locally:
 
 ```bash
-cd playground
-python3 -m http.server 8000
+./playground/build.sh          # compile the converter to convert.wasm
+cd playground && python3 -m http.server 8000
 ```
 
-Open http://localhost:8000, run SQL against a pre-seeded schema, and every
-captured plan renders as a flame graph using the same span derivation as this
-library. Traces can be downloaded as OTLP/JSON. See
-[playground/README.md](playground/README.md).
+See [playground/README.md](playground/README.md).
 
 ## Supported Input Formats
 
