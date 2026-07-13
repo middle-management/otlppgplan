@@ -207,6 +207,7 @@ func (c *logsToTracesConnector) convertToTraces(
 		ServiceName:     c.config.Conversion.ServiceName,
 		IncludePlanJSON: c.config.Conversion.IncludePlanJSON,
 		ExpandLoops:     c.config.Conversion.ExpandLoops,
+		Layout:          otlppgplan.SpanLayout(c.config.Conversion.Layout),
 	}
 	if ts := logRecord.Timestamp(); ts != 0 {
 		t := ts.AsTime()
