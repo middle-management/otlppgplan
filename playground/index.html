@@ -6,6 +6,20 @@
   <title>otlppgplan playground — PGlite auto_explain flame graphs</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='2' width='14' height='3' rx='1' fill='%232a78d6'/%3E%3Crect x='2' y='6' width='9' height='3' rx='1' fill='%231baf7a'/%3E%3Crect x='3' y='10' width='5' height='3' rx='1' fill='%23eda100'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
+  <script>
+    // Become cross-origin isolated via the coi-sw.js service worker so
+    // PGlite gets a high-resolution clock for EXPLAIN ANALYZE timings
+    // (~5µs instead of the ~100µs browsers allow non-isolated pages).
+    // One reload is needed for the worker to take control of the page.
+    if ('serviceWorker' in navigator && !window.crossOriginIsolated
+        && location.protocol !== 'file:' && !sessionStorage.getItem('coi-reloaded')) {
+      navigator.serviceWorker.register('coi-sw.js').then(async () => {
+        await navigator.serviceWorker.ready
+        sessionStorage.setItem('coi-reloaded', '1')
+        location.reload()
+      }).catch(() => {})
+    }
+  </script>
 </head>
 <body>
   <header>

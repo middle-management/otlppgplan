@@ -126,10 +126,13 @@ export function createFlameGraph(container, trace, { onSelect } = {}) {
     svg.appendChild(axis)
 
     for (const { span, depth } of rows) {
-      if (span.end <= w0 || span.start >= w1) continue
-      const x0 = Math.max(x(span.start), 0)
+      // Strict comparison so zero-duration spans (common under coarse browser
+      // timers, where fast nodes measure 0.000 ms) still render as ticks.
+      if (span.end < w0 || span.start > w1) continue
+      let x0 = Math.max(x(span.start), 0)
       const x1 = Math.min(x(span.end), width)
-      let w = Math.max(x1 - x0, 0.5)
+      let w = Math.max(x1 - x0, 2)
+      if (x0 + w > width) x0 = Math.max(width - w, 0)
       // 2px gap between adjacent fills when there's room for it
       const gap = w > 6 ? 1 : 0
       const y = AXIS_H + depth * (ROW_H + ROW_GAP)
