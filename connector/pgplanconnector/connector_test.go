@@ -413,8 +413,13 @@ func TestLogsToTracesConnector_NestedFunctionsSnapshot(t *testing.T) {
 	logs := plog.NewLogs()
 	rl := logs.ResourceLogs().AppendEmpty()
 	sl := rl.ScopeLogs().AppendEmpty()
-	for _, entry := range entries {
+	// A fixed timestamp per record makes the conversion base time
+	// deterministic; without it each trace is anchored to time.Now() and
+	// the snapshot drifts between runs.
+	base := time.Date(2025, 12, 18, 8, 20, 34, 0, time.UTC)
+	for i, entry := range entries {
 		lr := sl.LogRecords().AppendEmpty()
+		lr.SetTimestamp(pcommon.NewTimestampFromTime(base.Add(time.Duration(i) * time.Second)))
 		lr.Body().SetStr(entry)
 	}
 
