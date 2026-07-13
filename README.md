@@ -329,6 +329,10 @@ go build ./cmd/otlppgplan
 
 # Use
 cat query_plan.json | ./otlppgplan > traces.json
+
+# Pick a span layout (see "Span Layouts"): -layout flag or OTLPPGPLAN_LAYOUT env var
+cat query_plan.json | ./otlppgplan -layout flame > traces.json
+OTLPPGPLAN_LAYOUT=flame ./otlppgplan < query_plan.json > traces.json
 ```
 
 ## Examples
