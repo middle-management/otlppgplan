@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -14,13 +15,22 @@ import (
 )
 
 func main() {
+	layoutFlag := flag.String("layout", os.Getenv("OTLPPGPLAN_LAYOUT"),
+		"span layout for plan nodes: waterfall (default) or flame")
+	flag.Parse()
+
+	layout, err := parseLayout(*layoutFlag)
+	if err != nil {
+		die(err)
+	}
+
 	ctx := context.Background()
 	planJSON, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		die(err)
 	}
 
-	traces, err := convertInput(ctx, planJSON)
+	traces, err := convertInput(ctx, planJSON, layout)
 	if err != nil {
 		die(err)
 	}
@@ -47,12 +57,25 @@ func main() {
 	}
 }
 
-func convertInput(ctx context.Context, raw []byte) (ptrace.Traces, error) {
+func parseLayout(s string) (otlppgplan.SpanLayout, error) {
+	switch otlppgplan.SpanLayout(s) {
+	case "", otlppgplan.LayoutWaterfall:
+		return otlppgplan.LayoutWaterfall, nil
+	case otlppgplan.LayoutFlame:
+		return otlppgplan.LayoutFlame, nil
+	default:
+		return "", fmt.Errorf("invalid layout %q: must be %q or %q",
+			s, otlppgplan.LayoutWaterfall, otlppgplan.LayoutFlame)
+	}
+}
+
+func convertInput(ctx context.Context, raw []byte, layout otlppgplan.SpanLayout) (ptrace.Traces, error) {
 	raw = bytes.TrimSpace(raw)
 
 	opts := otlppgplan.ConvertOptions{
 		ServiceName: defaultServiceName(),
 		ExpandLoops: false,
+		Layout:      layout,
 	}
 
 	var sess otlppgplan.SessionTraceContext
