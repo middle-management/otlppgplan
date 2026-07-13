@@ -45,6 +45,26 @@ This starts PostgreSQL with auto_explain, collectors, and Jaeger. View traces at
 
 See [examples/DOCKER.md](examples/DOCKER.md) for details.
 
+### Browser Playground (no Docker)
+
+Explore plans as interactive flame graphs entirely in your browser:
+**https://middle-management.github.io/otlppgplan/** (deployed from `main` via
+GitHub Pages).
+
+The playground runs SQL in [PGlite](https://pglite.dev) (Postgres-in-WASM)
+with auto_explain, converts every captured plan with this library compiled
+to WebAssembly (`cmd/wasm`), and renders the resulting OTLP spans as flame
+graphs. Traces download as OTLP/JSON exactly as the library marshals them.
+
+To run it locally:
+
+```bash
+./playground/build.sh          # compile the converter to convert.wasm
+cd playground && python3 -m http.server 8000
+```
+
+See [playground/README.md](playground/README.md).
+
 ## Supported Input Formats
 
 The library automatically detects and handles multiple input formats:

@@ -1,0 +1,3 @@
+vendor/
+convert.wasm
+wasm_exec.js
